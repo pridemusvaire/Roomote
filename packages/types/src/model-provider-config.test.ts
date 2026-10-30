@@ -677,6 +677,10 @@ describe('SETUP_MODEL_PROVIDER_CATALOG', () => {
         providerId: 'requesty',
         modelId: 'requesty/anthropic/claude-sonnet-5-5',
       },
+      {
+        providerId: 'cloudflare-ai-gateway',
+        modelId: 'cloudflare-ai-gateway/anthropic/claude-sonnet-5.5',
+      },
       { providerId: 'azure', modelId: 'azure/claude-sonnet-5-5' },
       {
         providerId: 'azure-cognitive-services',
@@ -2534,7 +2538,7 @@ describe('Cloudflare inference providers', () => {
     ).toEqual(
       expect.arrayContaining([
         'cloudflare-ai-gateway/openai/gpt-5.6-terra',
-        'cloudflare-ai-gateway/anthropic/claude-sonnet-5',
+        'cloudflare-ai-gateway/anthropic/claude-sonnet-5.5',
         'cloudflare-ai-gateway/moonshotai/kimi-k3',
       ]),
     );

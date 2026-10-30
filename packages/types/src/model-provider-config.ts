@@ -912,7 +912,7 @@ export const SETUP_MODEL_PROVIDER_CATALOG = [
       'claude-fable-5': 'cloudflare-ai-gateway/anthropic/claude-fable-5',
       'claude-haiku-4-5': 'cloudflare-ai-gateway/anthropic/claude-haiku-4-5',
       'claude-opus-5-5': 'cloudflare-ai-gateway/anthropic/claude-opus-5-5',
-      'claude-sonnet-5': 'cloudflare-ai-gateway/anthropic/claude-sonnet-5',
+      'claude-sonnet-5-5': 'cloudflare-ai-gateway/anthropic/claude-sonnet-5.5',
       'gpt-5-6-sol': 'cloudflare-ai-gateway/openai/gpt-5.6-sol',
       'gpt-5-6-terra': 'cloudflare-ai-gateway/openai/gpt-5.6-terra',
       'gpt-5-6-luna': 'cloudflare-ai-gateway/openai/gpt-5.6-luna',
@@ -924,7 +924,7 @@ export const SETUP_MODEL_PROVIDER_CATALOG = [
     }),
     recommendedRoleModels: {
       helper: 'cloudflare-ai-gateway/openai/gpt-5.6-luna',
-      codeReview: 'cloudflare-ai-gateway/anthropic/claude-sonnet-5',
+      codeReview: 'cloudflare-ai-gateway/anthropic/claude-sonnet-5.5',
       explore: 'cloudflare-ai-gateway/openai/gpt-5.6-luna',
       planning: 'cloudflare-ai-gateway/anthropic/claude-opus-5-5',
     },

@@ -1785,6 +1785,7 @@ function resolveModelBackedOpenCodeConfig(
                 visionModel ?? effectiveCodingModel,
                 modelContextWindows,
                 modelCosts,
+                { audioVideoModel },
               ),
               runtimeEnv,
               configuredModelIds,

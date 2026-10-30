@@ -15,6 +15,7 @@ import {
   mergeBedrockMantleOpenAiProviderConfig,
   mergeBedrockMantleProviderConfig,
   mergeCatalogProviderCredentialConfig,
+  mergeCloudflareOpenCodeProviderConfig,
   mergeKimiForCodingProviderConfig,
   mergeCuratedOpenCodeModelConfig,
   mergeOpenAiCompatibleProviderConfig,
@@ -22,6 +23,7 @@ import {
   mergeOpenCodeChatGptFastModeOptions,
   mergeOpenRouterVariantAliasModels,
   normalizeOptionalReasoningEffort,
+  rewriteCloudflareOpenCodeModelId,
   SETTINGS_ONLY_MODEL_PROVIDER_ENV_VAR_NAMES,
   TASK_MODEL_ROLE_DESCRIPTORS,
   type TaskModelRole,
@@ -100,9 +102,11 @@ function buildModelBackedOpenCodeConfigContent(
         {
           model:
             rawRoleModel && !isTaskModelIdDisabled(rawRoleModel)
-              ? collectOpenRouterVariantModelAlias(
-                  variantAliases,
-                  toBedrockMantleRuntimeModelId(rawRoleModel),
+              ? rewriteCloudflareOpenCodeModelId(
+                  collectOpenRouterVariantModelAlias(
+                    variantAliases,
+                    toBedrockMantleRuntimeModelId(rawRoleModel),
+                  ),
                 )
               : undefined,
           reasoningEffort: normalizeOptionalReasoningEffort(
@@ -178,9 +182,11 @@ function buildModelBackedOpenCodeConfigContent(
   }
 
   if (options.reasoningOverride) {
-    const overrideModel = collectOpenRouterVariantModelAlias(
-      variantAliases,
-      toBedrockMantleRuntimeModelId(options.reasoningOverride.model),
+    const overrideModel = rewriteCloudflareOpenCodeModelId(
+      collectOpenRouterVariantModelAlias(
+        variantAliases,
+        toBedrockMantleRuntimeModelId(options.reasoningOverride.model),
+      ),
     );
     providerReasoningConfig = mergeOpenCodeModelReasoningOptions(
       providerReasoningConfig,
@@ -205,34 +211,35 @@ function buildModelBackedOpenCodeConfigContent(
   // Same Bedrock provider registrations the task worker applies: OpenCode's
   // catalog knows neither Mantle endpoint, and the native provider does not
   // read the deployment's bearer token on its own.
-  const providerConfig = mergeAmazonBedrockProviderConfig(
-    mergeBedrockMantleProviderConfig(
-      mergeBedrockMantleOpenAiProviderConfig(
-        mergeOpenAiCompatibleProviderConfig(
-          // Kimi for Coding is registered in full rather than left to
-          // OpenCode's runtime catalog, which has renamed the provider id.
-          mergeKimiForCodingProviderConfig(
-            // Providers whose key OpenCode would not find under the env var
-            // its catalog names (Z.AI, Z.AI Coding Plan, OpenCode Go).
-            mergeCatalogProviderCredentialConfig(
-              mergeOpenRouterVariantAliasModels(
-                providerModelConfig,
-                variantAliases,
+  const providerConfig = mergeCloudflareOpenCodeProviderConfig(
+    mergeAmazonBedrockProviderConfig(
+      mergeBedrockMantleProviderConfig(
+        mergeBedrockMantleOpenAiProviderConfig(
+          mergeOpenAiCompatibleProviderConfig(
+            // Kimi for Coding is registered in full rather than left to
+            // OpenCode's runtime catalog, which has renamed the provider id.
+            mergeKimiForCodingProviderConfig(
+              // Providers whose key OpenCode would not find under the env var
+              // its catalog names (Z.AI, Z.AI Coding Plan, OpenCode Go).
+              mergeCatalogProviderCredentialConfig(
+                mergeOpenRouterVariantAliasModels(
+                  providerModelConfig,
+                  variantAliases,
+                ),
+                env,
+                configuredModelIds,
               ),
-              env,
               configuredModelIds,
             ),
+            env,
             configuredModelIds,
+            visionModel,
+            {},
+            {},
+            { assumeImageSupport: options.promptOnlySubagents },
           ),
           env,
           configuredModelIds,
-          visionModel,
-          {},
-          {},
-          {
-            assumeImageSupport: options.promptOnlySubagents,
-            audioVideoModel,
-          },
         ),
         env,
         configuredModelIds,
@@ -453,9 +460,10 @@ function toRestrictedNonTaskConfigContent(
 }
 
 /**
- * Merges the Bedrock provider registrations for the env's role models into an
- * operator-supplied config content string. Malformed content is returned
- * unchanged — `toRestrictedNonTaskConfigContent` already fails it closed.
+ * Merges the Bedrock, Kimi, and Cloudflare provider registrations for the
+ * env's role models into an operator-supplied config content string.
+ * Malformed content is returned unchanged;
+ * `toRestrictedNonTaskConfigContent` already fails it closed.
  */
 function mergeBedrockRegistrationsIntoConfigContent(
   configContent: string,
@@ -469,7 +477,9 @@ function mergeBedrockRegistrationsIntoConfigContent(
       (modelId): modelId is string =>
         Boolean(modelId) && !isTaskModelIdDisabled(modelId!),
     )
-    .map(toBedrockMantleRuntimeModelId);
+    .map((modelId) =>
+      rewriteCloudflareOpenCodeModelId(toBedrockMantleRuntimeModelId(modelId)),
+    );
 
   if (roleModelIds.length === 0) {
     return configContent;
@@ -493,15 +503,19 @@ function mergeBedrockRegistrationsIntoConfigContent(
       !Array.isArray(config.provider)
         ? (config.provider as Record<string, unknown>)
         : {};
-    const provider = mergeAmazonBedrockProviderConfig(
-      mergeBedrockMantleProviderConfig(
-        mergeBedrockMantleOpenAiProviderConfig(
-          mergeKimiForCodingProviderConfig(
-            mergeCatalogProviderCredentialConfig(
-              mergeCuratedOpenCodeModelConfig(existingProvider, roleModelIds),
-              env,
+    const provider = mergeCloudflareOpenCodeProviderConfig(
+      mergeAmazonBedrockProviderConfig(
+        mergeBedrockMantleProviderConfig(
+          mergeBedrockMantleOpenAiProviderConfig(
+            mergeKimiForCodingProviderConfig(
+              mergeCatalogProviderCredentialConfig(
+                mergeCuratedOpenCodeModelConfig(existingProvider, roleModelIds),
+                env,
+                roleModelIds,
+              ),
               roleModelIds,
             ),
+            env,
             roleModelIds,
           ),
           env,
@@ -575,7 +589,12 @@ function mergeReasoningIntoConfigContent(
       }
       const model = collectOpenRouterVariantModelAlias(
         variantAliases,
-        toBedrockMantleRuntimeModelId(rawModel),
+        // Same rewrite the provider registration in
+        // `mergeBedrockRegistrationsIntoConfigContent` applies: reasoning
+        // options must merge under the id OpenCode's catalog registered.
+        rewriteCloudflareOpenCodeModelId(
+          toBedrockMantleRuntimeModelId(rawModel),
+        ),
       );
       provider = mergeOpenCodeModelReasoningOptions(
         provider,
@@ -586,7 +605,9 @@ function mergeReasoningIntoConfigContent(
     if (reasoningOverride) {
       const overrideModel = collectOpenRouterVariantModelAlias(
         variantAliases,
-        toBedrockMantleRuntimeModelId(reasoningOverride.model),
+        rewriteCloudflareOpenCodeModelId(
+          toBedrockMantleRuntimeModelId(reasoningOverride.model),
+        ),
       );
       provider = mergeOpenCodeModelReasoningOptions(
         provider,
@@ -652,15 +673,12 @@ export function buildOpenCodeCliEnv(
       env.OPENCODE_CONFIG_CONTENT = modelBackedConfigContent;
     }
   } else {
-    // Operator-supplied config skips the model-backed builder, but the role
-    // models still need their Bedrock providers registered — otherwise a
-    // Bedrock helper model fails with ProviderModelNotFoundError whenever a
-    // deployment also sets OPENCODE_CONFIG_CONTENT.
-    env.OPENCODE_CONFIG_CONTENT = mergeBedrockRegistrationsIntoConfigContent(
-      env.OPENCODE_CONFIG_CONTENT,
-      env,
-    );
-
+    // Operator-supplied config skips the model-backed builder. Reasoning is
+    // merged BEFORE the provider registrations, mirroring the model-backed
+    // order: a registration pass that ran first would create each model
+    // entry and `mergeOpenCodeModelReasoningOptions` then skips existing
+    // entries, silently dropping the configured effort (matters for AI
+    // Gateway Workers AI models whose ids are rewritten at registration).
     if (options.preserveReasoning) {
       env.OPENCODE_CONFIG_CONTENT = mergeReasoningIntoConfigContent(
         env.OPENCODE_CONFIG_CONTENT,
@@ -668,6 +686,15 @@ export function buildOpenCodeCliEnv(
         options.reasoningOverride,
       );
     }
+
+    // The role models still need their Bedrock, Kimi, and Cloudflare
+    // providers registered (otherwise a helper model fails with
+    // ProviderModelNotFoundError, or OpenCode's default Cloudflare catalog
+    // config, whenever a deployment also sets OPENCODE_CONFIG_CONTENT).
+    env.OPENCODE_CONFIG_CONTENT = mergeBedrockRegistrationsIntoConfigContent(
+      env.OPENCODE_CONFIG_CONTENT,
+      env,
+    );
   }
 
   // Applied unconditionally, after any operator-supplied config content is

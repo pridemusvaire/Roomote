@@ -96,23 +96,15 @@ describe('installAgentClis', () => {
   });
 
   it('skips reinstall when opencode already matches the expected version', async () => {
-    mockExeca
-      .mockResolvedValueOnce(versionResult(MISE_NPM_PATH))
-      .mockResolvedValueOnce(versionResult(DEFAULT_OPENCODE_CLI_VERSION));
+    mockExeca.mockResolvedValueOnce(
+      versionResult(DEFAULT_OPENCODE_CLI_VERSION),
+    );
 
     await installAgentClis(logger);
 
-    expect(mockExeca).toHaveBeenCalledTimes(2);
-    expect(mockExeca).toHaveBeenNthCalledWith(
-      1,
-      'bash',
-      ['-lc', 'mise which npm'],
-      {
-        reject: false,
-        stdin: 'ignore',
-      },
-    );
-    expect(mockExeca).toHaveBeenNthCalledWith(2, 'opencode', ['--version'], {
+    // npm is resolved only when an install is actually needed.
+    expect(mockExeca).toHaveBeenCalledTimes(1);
+    expect(mockExeca).toHaveBeenNthCalledWith(1, 'opencode', ['--version'], {
       reject: false,
       stdin: 'ignore',
     });
@@ -121,8 +113,8 @@ describe('installAgentClis', () => {
 
   it('reinstalls opencode into the sandbox root and refreshes the launcher when an older image is missing it', async () => {
     mockExeca
-      .mockResolvedValueOnce(versionResult(MISE_NPM_PATH))
       .mockRejectedValueOnce(new Error('spawn opencode ENOENT'))
+      .mockResolvedValueOnce(versionResult(MISE_NPM_PATH))
       .mockResolvedValueOnce(installResult())
       .mockResolvedValueOnce(versionResult(DEFAULT_OPENCODE_CLI_VERSION))
       .mockResolvedValueOnce(versionResult(DEFAULT_OPENCODE_CLI_VERSION));
@@ -156,8 +148,8 @@ describe('installAgentClis', () => {
     process.env[ROOMOTE_BAKED_OPENCODE_CLI_VERSION_ENV] = '1.18.0';
 
     mockExeca
-      .mockResolvedValueOnce(versionResult(MISE_NPM_PATH))
       .mockRejectedValueOnce(new Error('spawn opencode ENOENT'))
+      .mockResolvedValueOnce(versionResult(MISE_NPM_PATH))
       .mockResolvedValueOnce(installResult())
       .mockResolvedValueOnce(versionResult('1.18.0'))
       .mockResolvedValueOnce(versionResult('1.18.0'));
@@ -206,20 +198,18 @@ describe('installZeroCli', () => {
   });
 
   it('skips reinstall when zero already matches the expected version', async () => {
-    mockExeca
-      .mockResolvedValueOnce(versionResult(MISE_NPM_PATH))
-      .mockResolvedValueOnce(versionResult(DEFAULT_ZERO_CLI_VERSION));
+    mockExeca.mockResolvedValueOnce(versionResult(DEFAULT_ZERO_CLI_VERSION));
 
     await installZeroCli(logger);
 
-    expect(mockExeca).toHaveBeenCalledTimes(2);
+    expect(mockExeca).toHaveBeenCalledTimes(1);
     expect(mockWriteFileSync).not.toHaveBeenCalled();
   });
 
   it('installs zero into its own prefix so npm cannot prune the shared sandbox packages', async () => {
     mockExeca
-      .mockResolvedValueOnce(versionResult(MISE_NPM_PATH))
       .mockRejectedValueOnce(new Error('spawn zero ENOENT'))
+      .mockResolvedValueOnce(versionResult(MISE_NPM_PATH))
       .mockResolvedValueOnce(installResult())
       .mockResolvedValueOnce(versionResult(DEFAULT_ZERO_CLI_VERSION))
       .mockResolvedValueOnce(versionResult(DEFAULT_ZERO_CLI_VERSION));

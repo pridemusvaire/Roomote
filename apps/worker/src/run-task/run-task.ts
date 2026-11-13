@@ -88,6 +88,8 @@ import {
   seedRuntimeHomeMiseGlobalConfig,
 } from './agent-home';
 import { installZeroCli } from '../commands/setup/agent-clis';
+import { ARGENT_SKILL_NAME } from '../commands/setup/argent-cli';
+import { startArgentDeviceHost } from './argent-device-host';
 import { buildJevgrepTerminalEnv, setupJevgrep } from './jevgrep';
 import { buildJudgementTerminalEnv, setupJudgement } from './judgement-proxy';
 
@@ -994,6 +996,14 @@ export const runTask = async ({
       }
     }
 
+    // Operator opt-in for on-device verification: a deployment env var that
+    // points sandboxes at an Argent device host (see argent-cli.ts). The CLI
+    // installs in the background so it never delays task startup.
+    const { enabled: deviceHostAvailable } = startArgentDeviceHost(
+      taskEnvVars,
+      logger,
+    );
+
     const runtimeInstanceSkills = await instanceSkills
       .listForRuntime()
       .catch(() => {
@@ -1015,6 +1025,7 @@ export const runTask = async ({
         ...(zeroIntegrationEnabled ? [] : ['zero']),
         ...(jevgrepEnabled ? [] : ['jevgrep']),
         ...(judgementEnabled ? [] : ['judgement']),
+        ...(deviceHostAvailable ? [] : [ARGENT_SKILL_NAME]),
       ],
     });
 
@@ -1116,6 +1127,7 @@ export const runTask = async ({
         envVars,
         backgroundEnvironmentSetupPending:
           backgroundEnvironmentSetup?.hasPendingBackgroundSetup ?? false,
+        deviceHostAvailable,
       },
     );
     const environmentInstructions = formatEnvironmentInstructions(

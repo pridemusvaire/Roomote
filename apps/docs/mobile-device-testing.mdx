@@ -1,0 +1,170 @@
+---
+title: Mobile Device Testing
+icon: smartphone
+description: 'Let Roomote agents install a pull request build on iOS simulators and Android emulators, exercise the changed screens, and attach device screenshots to their review.'
+---
+
+Roomote agents can verify mobile app changes on real iOS simulators and Android
+emulators. When a pull request changes a React Native, Expo, native iOS, or
+native Android app, the review installs a build of the exact commit under
+review, walks through the changed screens, and posts what the device showed:
+defects as review findings and screenshots in the review summary.
+
+Device control uses [Argent](https://github.com/software-mansion/argent) by
+Software Mansion. Task sandboxes run Linux, so they cannot run simulators
+themselves. Instead, you run an Argent device host on a Mac, and every sandbox
+in the deployment drives that host's devices remotely. The Argent CLI uploads
+the build from the sandbox to the host, so the host needs no checkout of your
+repositories.
+
+## Prerequisites
+
+- a Mac you can dedicate to device testing, with Node.js 20.12 or newer
+- Xcode with at least one iOS simulator runtime, for iOS coverage
+- the Android SDK with at least one Android Virtual Device (AVD), for Android
+  coverage
+- a stable HTTPS hostname for the Mac that your sandbox provider can reach,
+  such as a named Cloudflare Tunnel or an ngrok reserved domain
+
+## Set up the device host
+
+1. Install Argent on the Mac. Use the same version Roomote installs in
+   sandboxes (currently `0.33.0`):
+
+   ```bash
+   npm install -g @swmansion/argent@0.33.0
+   ```
+
+2. Start the tool-server with windowless devices so nothing opens on the
+   Mac's screen:
+
+   ```bash
+   ARGENT_SIMULATOR_NO_WINDOW=1 ARGENT_EMULATOR_NO_WINDOW=1 \
+     argent server start --port 3001
+   ```
+
+   It prints a connection string such as `argent://<token>@127.0.0.1:3001`.
+   The part between `argent://` and `@` is the bearer token. **The server
+   creates a new token every time it starts**, so after any restart, copy the
+   new token into Roomote (see below).
+
+3. Expose it through an HTTPS tunnel that **rewrites the `Host` header to
+   `localhost`**. The tool-server rejects any request whose `Host` is not a
+   loopback name, to defend against DNS rebinding. Without the rewrite, every
+   call fails with `Refusing request with Host ...`. Point the tunnel at
+   `127.0.0.1`, not `localhost`: the tool-server listens on IPv4 only, and a
+   tunnel that resolves `localhost` to IPv6 `::1` gets `connection refused`.
+   Use a named tunnel or a reserved domain: quick tunnels get a new URL on
+   every restart.
+
+   ```bash
+   # Cloudflare named tunnel (set this in the tunnel's ingress rule)
+   #   service: http://127.0.0.1:3001
+   #   originRequest:
+   #     httpHostHeader: localhost
+   cloudflared tunnel run <tunnel-name>
+
+   # ngrok with a reserved domain
+   ngrok http 127.0.0.1:3001 --url=<your-domain> --host-header=rewrite
+   ```
+
+Roomote accepts only HTTPS device-host URLs, so the token never travels in
+cleartext. An HTTPS reverse proxy on your own network also works if it rewrites
+the `Host` header the same way, but self-hosted Docker sandboxes block private
+network ranges by default
+([`DOCKER_WORKER_EGRESS_POLICY`](/environment-variables#sandbox-providers)), so
+a tunnel is the reliable path for every sandbox provider. Keep the tool-server
+bound to `127.0.0.1`: binding it to `0.0.0.0` disables the Host check.
+
+## Connect Roomote
+
+Under **Settings > Environments > Deployment Environment Variables**, add:
+
+| Variable | Value |
+| --- | --- |
+| `ARGENT_TOOLS_URL` | The HTTPS tunnel URL of the device host. Plain `http://` URLs are ignored so the token never travels in cleartext. |
+| `ARGENT_AUTH_TOKEN` | The token from `argent server start`. |
+| `R_ARGENT_CLI_VERSION` | Optional. Overrides the Argent version installed in sandboxes. Keep it equal to the host's version. |
+
+New tasks pick the values up. When `ARGENT_TOOLS_URL` is set, each task
+installs the Argent CLI in the background (one to three minutes on a fresh
+sandbox, without delaying the task) and enables the `verify-on-device` skill. Sandboxes
+in deployments without it never install Argent, and sandboxes run Argent with
+its anonymous telemetry turned off.
+
+To check the connection, start a task, wait three minutes for the install, and ask
+it to run `argent run list-devices`. It should list the Mac's simulators and
+AVDs.
+
+## Give agents an installable build
+
+The agent must install a build of the exact commit it is testing, and never
+tests a build from a different commit. It looks for one in this order:
+
+1. **A build you hand it** for that commit, when you run the check yourself.
+2. **A documented build.** Explain in the repository's `AGENTS.md` on the
+   default branch how to get a simulator `.app` (zipped) or an `.apk` for a
+   given commit, for example a CI artifact named after the commit SHA, an EAS
+   build, or a script. Agents read these instructions from the pull request's
+   base branch, never from the pull request itself. This is the only source of
+   iOS builds, because iOS apps need macOS to compile.
+3. **An Android build in the sandbox.** If the environment setup installs the
+   Android SDK and a JDK, the agent builds the checked-out commit. For React
+   Native and Expo it builds a release variant with the JavaScript bundle
+   embedded, because debug builds load JavaScript from a Metro server the
+   device host cannot reach. Agents never change build or signing
+   configuration to make a build succeed.
+
+If none of these works, the review says the device check was skipped because
+there was no installable build, and the review carries on without it.
+
+## What the review shows
+
+- a `Device check:` line in the review summary: what was verified on which
+  platform, with screenshot links, or why the check did not run
+- inline findings for defects seen on the device, such as crashes, error
+  screens, broken layout, or wrong copy, with reproduction steps and a
+  screenshot
+
+A device check that cannot run never fails the review or blocks an approval.
+Sync reviews run the check again for the new changes on each push. To run a
+check yourself, type `/verify-on-device` in the task prompt, or start a
+session message with `$verify-on-device`.
+
+## Security and limits
+
+- **Pull requests from forks are never built or installed.** Building a change
+  runs its code in the task sandbox, which holds your deployment environment
+  variables, and installing it runs the app on the device host. Reviews of
+  same-repository pull requests do both, so treat the device host as trusted
+  with code from anyone who can push branches to your repositories.
+- `ARGENT_AUTH_TOKEN` is readable inside every task sandbox in the deployment,
+  like any deployment environment variable. Anyone who can run a task can drive
+  everything the tool-server can reach on the host, not only simulators. Argent
+  always probes port 9222 for Chromium apps and can read their cookies and
+  storage, so never run a browser or Electron app with remote debugging on the
+  device host. Use a dedicated Mac with no personal accounts signed in.
+  To rotate the token, restart the tool-server and update the variable.
+- The token is the secret; the tunnel URL alone grants no access. Agents are
+  told never to post either one, and Roomote masks token-shaped values in task
+  output, but treat the URL as internal.
+- Argent has no device reservations and no shutdown command. Agents boot a
+  free simulator or emulator when one exists and reuse a running one only when
+  none is free. When another task changes the app on a shared device mid-check,
+  the agent marks that check inconclusive rather than reporting a defect, so
+  add simulators or AVDs if parallel reviews often share devices. Booted
+  devices stay up: schedule a cleanup on the Mac during quiet hours, for
+  example `xcrun simctl shutdown all` and `adb -s <serial> emu kill` for each
+  emulator listed by `adb devices`.
+- Agents are told to stop a device check after 25 minutes, including the build.
+
+## Troubleshooting
+
+| Symptom | Check |
+| --- | --- |
+| `device host unavailable` | The tunnel is up, `ARGENT_TOOLS_URL` is the tunnel URL, and `ARGENT_AUTH_TOKEN` matches the token from the server's latest start. Also check the task's worker log for `Failed to install Argent CLI`. |
+| `Refusing request with Host` | The tunnel is not rewriting the `Host` header to `localhost`. |
+| Tunnel logs `connection refused` on `[::1]` | The tunnel targets `localhost`, which resolved to IPv6. Point it at `http://127.0.0.1:<port>`. |
+| No Android devices listed | The AVDs exist for the macOS user that runs the tool-server (`emulator -list-avds`). |
+| `no installable build` | The default branch documents how to get a build for a commit, or the environment can build Android. |
+| `untrusted pull request` | The pull request comes from a fork. This is expected; fork pull requests are never run on devices. |

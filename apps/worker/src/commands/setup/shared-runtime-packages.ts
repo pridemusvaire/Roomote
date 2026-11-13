@@ -44,12 +44,6 @@ export function getSharedSandboxRuntimePackageSpecs(
   ];
 }
 
-export function getZeroCliPackageSpec(
-  env: NodeJS.ProcessEnv = process.env,
-): string {
-  return `${ZERO_CLI_PACKAGE_NAME}@${resolveExpectedZeroCliVersion(env)}`;
-}
-
 /**
  * The Zero CLI must install into its own npm prefix: `npm install --no-save`
  * reifies the prefix's node_modules down to just the requested package, so

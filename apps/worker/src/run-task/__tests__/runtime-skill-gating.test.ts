@@ -300,7 +300,13 @@ describe('Zero integration runtime gating', () => {
     expect(installZeroCliMock).not.toHaveBeenCalled();
     expect(activateSkillsFolderMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        excludeSkillNames: ['doctor', 'zero', 'jevgrep', 'judgement'],
+        excludeSkillNames: [
+          'doctor',
+          'zero',
+          'jevgrep',
+          'judgement',
+          'verify-on-device',
+        ],
       }),
     );
   });
@@ -324,7 +330,12 @@ describe('Zero integration runtime gating', () => {
     expect(installZeroCliMock).toHaveBeenCalledTimes(1);
     expect(activateSkillsFolderMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        excludeSkillNames: ['doctor', 'jevgrep', 'judgement'],
+        excludeSkillNames: [
+          'doctor',
+          'jevgrep',
+          'judgement',
+          'verify-on-device',
+        ],
       }),
     );
   });
@@ -374,3 +385,71 @@ it.each([true, false])(
     );
   },
 );
+
+const { startArgentDeviceHostMock } = vi.hoisted(() => ({
+  startArgentDeviceHostMock: vi.fn(() => ({
+    enabled: false,
+    installed: Promise.resolve(false),
+  })),
+}));
+
+vi.mock('../argent-device-host', () => ({
+  startArgentDeviceHost: startArgentDeviceHostMock,
+}));
+
+describe('Argent device host runtime gating', () => {
+  const runWithEnv = (envVars: Record<string, string>) =>
+    runTask({
+      ...baseRunTaskArgs(),
+      envVars,
+      taskRun: {
+        id: 401,
+        taskId: 'task-argent',
+        payloadKind: TaskPayloadKind.StandardTask,
+        harness: 'opencode-server',
+        payload: {},
+        result: null,
+      } as never,
+    });
+
+  it('activates verify-on-device and the sandbox note when a host is configured', async () => {
+    startArgentDeviceHostMock.mockReturnValueOnce({
+      enabled: true,
+      installed: Promise.resolve(true),
+    });
+
+    await runWithEnv({ ARGENT_TOOLS_URL: 'https://devices.example.test' });
+
+    expect(startArgentDeviceHostMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ARGENT_TOOLS_URL: 'https://devices.example.test',
+      }),
+      expect.anything(),
+    );
+    expect(activateSkillsFolderMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        excludeSkillNames: expect.not.arrayContaining(['verify-on-device']),
+      }),
+    );
+    expect(buildSandboxInstructionMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ deviceHostAvailable: true }),
+    );
+  });
+
+  it('keeps verify-on-device excluded when no host is configured', async () => {
+    await runWithEnv({});
+
+    expect(activateSkillsFolderMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        excludeSkillNames: expect.arrayContaining(['verify-on-device']),
+      }),
+    );
+    expect(buildSandboxInstructionMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ deviceHostAvailable: false }),
+    );
+  });
+});

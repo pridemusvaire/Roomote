@@ -39,6 +39,7 @@ const CORE_PACKAGED_SKILL_INVOCATIONS = [
   'sentry-triage',
   'simplify',
   'update-dependencies',
+  'verify-on-device',
   'zero',
 ] as const;
 

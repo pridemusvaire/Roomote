@@ -435,6 +435,17 @@ apply semantics.
 | `ROOMOTE_PREVIEW_DOMAIN`    | Optional        | Roomote preview domain override used by preview runtime analysis.                                            |
 | `PREVIEW_TOKEN_TTL_SECONDS` | Optional        | Preview auth token lifetime. Defaults to 3600 seconds.                                                       |
 
+### Mobile device testing
+
+Set these as **Deployment Environment Variables** (Settings > Environments) so
+they reach task sandboxes. See [Mobile Device Testing](/mobile-device-testing).
+
+| Env var                      | Required            | Used for                                                                                          |
+| ---------------------------- | ------------------- | ------------------------------------------------------------------------------------------------- |
+| `ARGENT_TOOLS_URL`           | Device testing      | HTTPS URL of the Argent device host (plain HTTP is ignored). Setting it enables on-device verification for new tasks.     |
+| `ARGENT_AUTH_TOKEN`          | Device testing      | Bearer token printed by `argent server start` on the device host. Changes when the server restarts. |
+| `R_ARGENT_CLI_VERSION` | Optional            | Argent CLI version installed in sandboxes. Defaults to the version Roomote pins; match the host.  |
+
 ### Observability and request timing
 
 | Env var                                  | Required         | Used for                                                                              |

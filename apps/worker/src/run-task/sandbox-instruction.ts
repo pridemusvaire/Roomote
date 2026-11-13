@@ -8,6 +8,8 @@ import type {
 } from '@roomote/types';
 import { appendInitialPath, getDockerProjectLogFilePath } from '@roomote/types';
 
+import { buildDeviceHostInstructionLines } from './device-host-instruction';
+
 function withDefinedEntries<T extends Record<string, unknown>>(
   value: T,
 ): Record<string, unknown> {
@@ -176,6 +178,8 @@ export function buildSandboxInstruction(
      * at instruction-build time, so the agent must not assume they finished.
      */
     backgroundEnvironmentSetupPending?: boolean;
+    /** True when an Argent device host is configured (its CLI may still be installing). */
+    deviceHostAvailable?: boolean;
   },
 ): string | undefined {
   const lines: string[] = [
@@ -266,6 +270,10 @@ export function buildSandboxInstruction(
         );
       }
     }
+  }
+
+  if (options?.deviceHostAvailable) {
+    lines.push(...buildDeviceHostInstructionLines());
   }
 
   if (hasLiveBrowser) {

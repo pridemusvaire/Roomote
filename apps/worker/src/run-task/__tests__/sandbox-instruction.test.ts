@@ -485,4 +485,26 @@ describe('buildSandboxInstruction', () => {
     );
     expect(instruction).not.toContain('https://sandbox-raw-host.modal.host');
   });
+
+  it('advertises the mobile device host only when it is available, without leaking the token', () => {
+    const envVars = {
+      ARGENT_TOOLS_URL: 'https://devices.example.test',
+      ARGENT_AUTH_TOKEN: 'secret-device-token',
+    };
+    const withHost =
+      buildSandboxInstruction(false, undefined, {
+        envVars,
+        deviceHostAvailable: true,
+      }) ?? '';
+    const withoutHost =
+      buildSandboxInstruction(false, undefined, { envVars }) ?? '';
+
+    expect(withHost).toContain('remote mobile device host');
+    expect(withHost).toContain('`verify-on-device` skill');
+    expect(withHost).toContain('/tmp/roomote-argent-install-ready');
+    expect(withHost).not.toContain('secret-device-token');
+    expect(withHost).not.toContain('https://devices.example.test');
+    expect(withoutHost).not.toContain('mobile device host');
+    expect(withoutHost).not.toContain('verify-on-device');
+  });
 });

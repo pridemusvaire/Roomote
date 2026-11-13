@@ -30,12 +30,11 @@ const config: KnipConfig = {
       // tar is supplied by the host and used to inspect worker release archives.
       ignoreBinaries: ['pm2', 'ngrok', 'tar'],
     },
-    // Self-contained Mintlify docs site. It has no TypeScript project; the
-    // `mint` CLI is installed globally.
+    // Self-contained Mintlify docs site. It has no TypeScript project; its
+    // scripts fetch the pinned `mint` CLI with `pnpm dlx`.
     'apps/docs': {
       entry: [],
       project: [],
-      ignoreBinaries: ['mint'],
     },
     'apps/e2e': {
       entry: ['src/run-direct-suite.ts', 'src/suites/**/*.ts'],

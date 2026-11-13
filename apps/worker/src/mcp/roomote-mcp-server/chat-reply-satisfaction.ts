@@ -117,6 +117,33 @@ function writeState(
   fs.writeFileSync(stateFilePath, JSON.stringify(state), 'utf8');
 }
 
+/**
+ * Names `sessionId` as the chat's main (parent) thread, replacing the one
+ * recorded earlier. Called whenever the task's main agent session changes (an
+ * engine switch, or a session that could not be restored), so the stop hook
+ * keeps enforcing the closeout on the new session and its replies still count,
+ * instead of treating it as a child thread that may end without one.
+ */
+export function setChatParentThread(input: {
+  sessionId: string;
+  stateFilePath?: string;
+}): void {
+  const stateFilePath = getStateFilePath(input.stateFilePath);
+  const sessionId = trimString(input.sessionId);
+
+  if (!stateFilePath || !sessionId) {
+    return;
+  }
+
+  const existingState = readState(stateFilePath);
+
+  if (trimString(existingState.parentThreadId) === sessionId) {
+    return;
+  }
+
+  writeState(stateFilePath, { ...existingState, parentThreadId: sessionId });
+}
+
 export function recordChatTurnStart(input: {
   turnMessageTs: string;
   allowReaction?: boolean;

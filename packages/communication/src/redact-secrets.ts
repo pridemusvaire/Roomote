@@ -20,6 +20,31 @@ export function createDiagnosticRedactor(
         environmentAssignments: options.environmentAssignments,
       });
     },
+    /**
+     * The `[name, value]` pairs of the environment variables whose names mark
+     * them secret. The name lets a caller tell an agent which variable to
+     * reference instead of repeating its value.
+     */
+    sensitiveEnvEntries(
+      env: Readonly<Record<string, string | undefined>>,
+    ): Array<[name: string, value: string]> {
+      return Object.entries(env).filter(
+        (entry): entry is [string, string] =>
+          core.isSensitiveKey(entry[0], 'environment') &&
+          typeof entry[1] === 'string' &&
+          entry[1] !== '',
+      );
+    },
+    /**
+     * The values of the environment variables whose names mark them secret, to
+     * hand to `redactToolData`: a pattern cannot recognise an arbitrary token,
+     * but its exact value can be masked wherever a tool echoes it.
+     */
+    sensitiveEnvValues(
+      env: Readonly<Record<string, string | undefined>>,
+    ): string[] {
+      return redactor.sensitiveEnvEntries(env).map(([, value]) => value);
+    },
     redactToolData<T>(value: T, secretValues: readonly string[] = []): T {
       const envKey =
         /^(?:env|environment|environmentVariables|environment_variables)$/i;
@@ -102,5 +127,9 @@ export function createDiagnosticRedactor(
   return redactor;
 }
 
-export const { redactSecrets, redactToolData } =
-  createDiagnosticRedactor(secretRedactor);
+export const {
+  redactSecrets,
+  redactToolData,
+  sensitiveEnvEntries,
+  sensitiveEnvValues,
+} = createDiagnosticRedactor(secretRedactor);

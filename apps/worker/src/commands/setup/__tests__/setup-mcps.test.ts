@@ -10,6 +10,9 @@ vi.mock('@roomote/sdk/client', async (importOriginal) => ({
 
 const { REFUSED_ENV_REFERENCE_PLACEHOLDER } = await import('@roomote/types');
 
+const { MASK_SECRETS_FILE_PATH } =
+  await import('../../../lib/mask-secrets-file');
+
 const { BUILT_IN_MCPS, resolveBuiltInMcpServers } =
   await import('../setup-mcps');
 
@@ -309,6 +312,51 @@ describe('resolveBuiltInMcpServers', () => {
     expect(internalConfig.env.INTERNAL_TOKEN).toBe('abc123');
     expect(internalConfig.env.MISE_DATA_DIR).toBe('/opt/mise');
     expect(internalConfig.env.MISE_CACHE_DIR).toBe('/opt/mise/cache');
+  });
+
+  it('points the Roomote server at the file of secret values to mask on a Cursor task', () => {
+    const { roomote } = resolveBuiltInMcpServers(
+      {
+        ROOMOTE_CLOUD_TOKEN: 'run-token',
+        OPENAI_API_KEY: 'sk-never-passed',
+      },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { maskSecretValues: true },
+    );
+
+    expect(roomote).toMatchObject({
+      env: { ROOMOTE_MASK_SECRETS_FILE: MASK_SECRETS_FILE_PATH },
+    });
+    // The file path travels, never the values.
+    expect(JSON.stringify(roomote)).not.toContain('sk-never-passed');
+  });
+
+  it('leaves the file out of the Roomote server env on any other task, OpenCode included', () => {
+    const taskEnv = { ROOMOTE_CLOUD_TOKEN: 'run-token' };
+
+    for (const roomote of [
+      resolveBuiltInMcpServers(taskEnv).roomote,
+      resolveBuiltInMcpServers(
+        taskEnv,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        {
+          maskSecretValues: false,
+        },
+      ).roomote,
+    ]) {
+      expect(roomote).toMatchObject({
+        env: { ROOMOTE_CLOUD_TOKEN: 'run-token' },
+      });
+      expect(JSON.stringify(roomote)).not.toContain(
+        'ROOMOTE_MASK_SECRETS_FILE',
+      );
+    }
   });
 
   it('interpolates custom stdio MCP env values from task env', () => {

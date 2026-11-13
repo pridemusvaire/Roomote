@@ -151,6 +151,8 @@ function makeStandardTaskRun(
     payload: {
       repo: 'owner/repo',
       description: 'Investigate auth flakes',
+      // A model the task chose itself: its provider's key must be resolved.
+      harnessModelOverrides: { 'opencode-server': 'cursor/composer-2.5' },
     },
     result: null,
     task: makeTaskRow(),
@@ -351,6 +353,9 @@ describe('dequeueTaskRun', () => {
       {
         sourceControlProvider: ['gitlab', 'github'],
         includeSandboxOpenRouterApiKey: false,
+        taskPayload: expect.objectContaining({
+          harnessModelOverrides: { 'opencode-server': 'cursor/composer-2.5' },
+        }),
       },
     );
     expect(result?.task).toMatchObject({

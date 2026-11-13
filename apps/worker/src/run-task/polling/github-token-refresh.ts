@@ -1,7 +1,7 @@
 import { sdk } from '@roomote/sdk/client';
 
 import {
-  applySourceControlTokenMetadata,
+  applySourceControlTokens,
   ensureSourceControlTokenEnvFiles,
   runUnlessCredentialWriteBarrier,
 } from '../../lib';
@@ -62,7 +62,7 @@ export async function refreshGitHubToken({
       runId,
     });
     ensureSourceControlTokenEnvFiles();
-    await applySourceControlTokenMetadata(result);
+    await applySourceControlTokens(result);
 
     const parsedNextRefreshAtMs = Date.parse(result.nextRefreshAt);
     const nextRefreshAtMs = Number.isNaN(parsedNextRefreshAtMs)

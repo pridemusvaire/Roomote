@@ -1,3 +1,4 @@
+import { CURSOR_PROVIDER_ID } from './cursor-models';
 import {
   isReasoningEffort,
   REASONING_EFFORT_VALUES,
@@ -439,6 +440,12 @@ export type SetupModelProviderDescriptor = {
    * unaffected.
    */
   hidden?: boolean;
+  /**
+   * The provider cannot serve every role, so it must never be an operator's
+   * only provider: the setup wizard does not offer it, and Settings offers it
+   * only once another provider is connected.
+   */
+  requiresOtherProvider?: boolean;
   /**
    * When true, operators can connect more than one instance of this provider
    * type. Only OpenAI-compatible supports this today (named instances with
@@ -1305,6 +1312,24 @@ export const SETUP_MODEL_PROVIDER_CATALOG = [
     recommendedRoleModels: {
       vision: 'zai-coding-plan/glm-5.3-flash',
     },
+  },
+  {
+    // Served by Cursor's own agent runtime (`cursor-agent acp`), not OpenCode,
+    // so only the coding role can use it and there is no models.dev entry.
+    id: CURSOR_PROVIDER_ID,
+    label: 'Cursor',
+    envVarName: 'CURSOR_API_KEY',
+    defaultRoomoteModel: 'cursor/composer-2.5',
+    authKind: 'api-key',
+    requiresOtherProvider: true,
+    credentialHelp: {
+      text: 'Paste a Cursor API key from the Cursor dashboard. Cursor models run on the Cursor agent runtime and are billed to your Cursor plan.',
+      href: 'https://cursor.com/dashboard',
+      linkLabel: 'Open Cursor dashboard',
+    },
+    suggestedTaskModels: mapRecommendedTaskModels({
+      'composer-2-5': 'cursor/composer-2.5',
+    }),
   },
   {
     // Provider id matches models.dev / OpenCode (`github-copilot`).

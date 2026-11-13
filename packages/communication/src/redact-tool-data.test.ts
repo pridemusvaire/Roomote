@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { redactToolData } from './redact-secrets';
+import {
+  redactToolData,
+  sensitiveEnvEntries,
+  sensitiveEnvValues,
+} from './redact-secrets';
 
 describe('tool diagnostic redaction', () => {
   it('masks the complete unquoted multiword credential value through EOL', () => {
@@ -147,5 +151,48 @@ describe('tool diagnostic redaction', () => {
     expect(output.output === text).toBe(true);
     expect(output.items.length).toBe(80);
     expect(output.tokenCount).toBe(42);
+  });
+});
+
+describe('sensitiveEnvValues', () => {
+  it('keeps the values of secret-named variables and drops the rest', () => {
+    const values = sensitiveEnvValues({
+      CURSOR_API_KEY: 'cursor-secret-value',
+      GITLAB_TOKEN: 'gitlab-secret-value',
+      DB_PASSWORD: 'password-secret-value',
+      PATH: '/usr/bin:/bin',
+      EDITOR: 'vim-the-editor',
+      EMPTY_TOKEN: '',
+      UNSET_TOKEN: undefined,
+    });
+
+    expect(values.sort()).toEqual([
+      'cursor-secret-value',
+      'gitlab-secret-value',
+      'password-secret-value',
+    ]);
+  });
+
+  it('feeds redactToolData so a secret is masked wherever it appears', () => {
+    const values = sensitiveEnvValues({ GITLAB_TOKEN: 'zzz-plain-value-123' });
+    const output = redactToolData(
+      { output: 'GITLAB_TOKEN is zzz-plain-value-123 today' },
+      values,
+    );
+
+    expect(output.output).not.toContain('zzz-plain-value-123');
+  });
+});
+
+describe('sensitiveEnvEntries', () => {
+  it('pairs each secret-named variable with its value', () => {
+    expect(
+      sensitiveEnvEntries({
+        GITLAB_TOKEN: 'gitlab-secret-value',
+        PATH: '/usr/bin',
+        EMPTY_TOKEN: '',
+        UNSET_TOKEN: undefined,
+      }),
+    ).toEqual([['GITLAB_TOKEN', 'gitlab-secret-value']]);
   });
 });

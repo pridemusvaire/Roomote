@@ -83,6 +83,7 @@ import {
   groupModelsByDisplayProvider,
   getSetupModelProvider,
   getSetupProviderTaskModelPrefix,
+  isTaskModelAllowedForRole,
 } from '@roomote/types';
 import type {
   DisplayModelProviderGroup,
@@ -321,8 +322,12 @@ function TaskModelRoleEditor({
         ? `Set by ${descriptor.modelEnvVar}, not changeable in the UI.`
         : `Set by ${descriptor.reasoningEnvVar}, not changeable in the UI.`;
   const sameAsCoding = descriptor.modelFallback === 'coding';
+  // Only the coding role can run Cursor models; every other role runs on
+  // OpenCode, so they are not offered there.
   const models = optionGroups.flatMap((group) =>
-    group.items.map((item) => ({ ...item, providerLabel: group.label })),
+    group.items
+      .filter((item) => isTaskModelAllowedForRole(config.role, item.id))
+      .map((item) => ({ ...item, providerLabel: group.label })),
   );
   const pickerModels = sameAsCoding
     ? [
@@ -2487,7 +2492,11 @@ export function ModelSettingsSection({
                           ...roleOptionGroups[config.role].flatMap((group) =>
                             group.items.filter(
                               (model) =>
-                                model.id !== resolvedModelIds[config.role],
+                                model.id !== resolvedModelIds[config.role] &&
+                                isTaskModelAllowedForRole(
+                                  config.role,
+                                  model.id,
+                                ),
                             ),
                           ),
                         ]}

@@ -1,7 +1,10 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { groupModelsByDisplayProvider } from '@roomote/types';
+import {
+  groupModelsByDisplayProvider,
+  isCursorTaskModelId,
+} from '@roomote/types';
 
 import {
   Button,
@@ -40,6 +43,11 @@ type ModelSelectProps = {
   emptyOptionLabel?: string;
   /** Trigger size; use 'default' to line up with default-size form controls. */
   size?: 'sm' | 'default';
+  /**
+   * Hides Cursor models, which only the coding role can run. Every other
+   * model role runs on OpenCode.
+   */
+  codingOnlyModelsHidden?: boolean;
 };
 
 // Radix Select items cannot use an empty-string value, so the empty option
@@ -61,9 +69,22 @@ export function ModelSelect({
   ariaLabel = 'Model',
   emptyOptionLabel,
   size = 'sm',
+  codingOnlyModelsHidden = false,
 }: ModelSelectProps) {
-  const { data, isPending } = useLaunchTaskModels();
+  const { data: launchModels, isPending } = useLaunchTaskModels();
   const [open, setOpen] = useState(false);
+  const data = useMemo(
+    () =>
+      launchModels && codingOnlyModelsHidden
+        ? {
+            ...launchModels,
+            models: launchModels.models.filter(
+              (model) => !isCursorTaskModelId(model.id),
+            ),
+          }
+        : launchModels,
+    [launchModels, codingOnlyModelsHidden],
+  );
   const modelGroups = useMemo(() => {
     const sortedModels = [...(data?.models ?? [])].sort((left, right) =>
       left.displayName.localeCompare(right.displayName),

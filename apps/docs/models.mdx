@@ -94,6 +94,7 @@ general API balance:
 | Provider | Connection | Usage behavior |
 | --- | --- | --- |
 | <IntegrationName href="/providers/inference/chatgpt" icon="openai" name="ChatGPT Subscription" /> | OpenAI device authorization | ChatGPT plan windows |
+| [Cursor](/providers/inference/cursor) | Cursor API key | Cursor plan, coding role only |
 | <IntegrationName href="/providers/inference/github-copilot" icon="githubcopilot" name="GitHub Copilot" /> | GitHub device authorization | Copilot plan allowance |
 | <IntegrationName href="/providers/inference/kimi-for-coding" icon="kimi" name="Kimi for Coding" /> | Kimi membership key | Coding membership allowance |
 | <IntegrationName href="/providers/inference/opencode-go" icon="opencode" name="OpenCode Go" /> | OpenCode API key | Go plan allowance |
@@ -309,7 +310,9 @@ R_EXPLORE_MODEL=openrouter/openai/gpt-5.6-luna
 Roomote automatically makes common provider configuration available to the
 model runtime, including OpenRouter, Requesty, Vercel AI Gateway, OpenAI, Azure
 OpenAI, Azure AI Foundry, Anthropic, Google Gemini, Moonshot, Kimi for Coding,
-MiniMax, Z.AI, OpenCode, Amazon Bedrock, xAI, and GitHub Copilot. For
+MiniMax, Z.AI, OpenCode, Amazon Bedrock, xAI, and GitHub Copilot. Cursor is the
+exception: it runs on Cursor's own agent in the sandbox, so `CURSOR_API_KEY` is
+present in the task sandbox environment. For
 gateway-supported providers, credentials stay on the control plane and model
 requests are proxied instead of forwarding the credentials into task workers.
 Use `R_MODEL_ENV_KEYS` when a provider key uses a custom env var name and must be

@@ -15,6 +15,11 @@ import {
   type TaskEvent,
 } from '@roomote/types';
 
+import { HarnessStartError } from '../../sandbox-server/lib/harness-start-error';
+import {
+  recordTaskSecretEntries,
+  resetTaskSecretRegistryForTesting,
+} from '../../lib/task-secret-registry';
 import { ReconnectableHarness } from '../reconnectable-harness';
 
 function createLogger() {
@@ -962,6 +967,175 @@ describe('ReconnectableHarness', () => {
       reconnectableHarness.dispose();
     });
 
+    it('stops retrying a restart that can never succeed and shows why', async () => {
+      const first = new FakeHarness();
+      const spawnHarness = vi.fn(async () => {
+        if (spawnHarness.mock.calls.length === 1) {
+          return { harness: first, subprocess: createSubprocess() as never };
+        }
+        throw new HarnessStartError('CURSOR_API_KEY is not set.', {
+          retryable: false,
+        });
+      });
+      const record = vi.fn();
+      const reconnectableHarness = new ReconnectableHarness({
+        logger: createLogger(),
+        spawnHarness,
+        diagnosticEvents: { record },
+      });
+      const taskEvents: unknown[] = [];
+      const disconnected = vi.fn();
+      reconnectableHarness.on('taskEvent', (event) => taskEvents.push(event));
+      reconnectableHarness.on('disconnected', disconnected);
+
+      await reconnectableHarness.start();
+      first.emit('disconnected');
+
+      await vi.waitFor(() => expect(disconnected).toHaveBeenCalledTimes(1));
+      expect(spawnHarness).toHaveBeenCalledTimes(2);
+      expect(taskEvents).toEqual([
+        expect.objectContaining({
+          eventName: 'message',
+          payload: [
+            expect.objectContaining({
+              message: expect.objectContaining({
+                say: 'terminal_provider_error',
+                text: 'CURSOR_API_KEY is not set.',
+              }),
+            }),
+          ],
+        }),
+      ]);
+      expect(record).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: 'harness_reconnect_exhausted' }),
+      );
+
+      reconnectableHarness.dispose();
+    });
+
+    it('ends the task with the reason on failTask, under the latest session', async () => {
+      const first = new FakeHarness();
+      const reconnectableHarness = new ReconnectableHarness({
+        logger: createLogger(),
+        spawnHarness: async () => ({
+          harness: first,
+          subprocess: createSubprocess() as never,
+        }),
+      });
+      const taskEvents: unknown[] = [];
+      const disconnected = vi.fn();
+      reconnectableHarness.on('taskEvent', (event) => taskEvents.push(event));
+      reconnectableHarness.on('disconnected', disconnected);
+
+      await reconnectableHarness.start({ initialSessionId: 'session-9' });
+      reconnectableHarness.failTask('Could not switch models.');
+
+      expect(taskEvents).toEqual([
+        expect.objectContaining({
+          payload: [
+            expect.objectContaining({
+              taskId: 'session-9',
+              message: expect.objectContaining({
+                say: 'terminal_provider_error',
+                text: 'Could not switch models.',
+              }),
+            }),
+          ],
+        }),
+      ]);
+      expect(disconnected).toHaveBeenCalledTimes(1);
+
+      reconnectableHarness.dispose();
+    });
+
+    it('tells the next spawn which prompt a model fallback is replaying, once', async () => {
+      const first = new FakeHarness();
+      const second = new FakeHarness();
+      const third = new FakeHarness();
+      const spawnHarness = vi
+        .fn()
+        .mockResolvedValueOnce({
+          harness: first,
+          subprocess: createSubprocess(),
+        })
+        .mockResolvedValueOnce({
+          harness: second,
+          subprocess: createSubprocess(),
+        })
+        .mockResolvedValueOnce({
+          harness: third,
+          subprocess: createSubprocess(),
+        });
+      const reconnectableHarness = new ReconnectableHarness({
+        logger: createLogger(),
+        spawnHarness,
+      });
+      const request = {
+        role: 'coding',
+        fromModelId: 'cursor/composer-2.5',
+        toModelId: 'openai/gpt-5',
+        toReasoningEffort: null,
+        errorSummary: 'limit',
+        trigger: 'immediate',
+      } as const;
+
+      await reconnectableHarness.start();
+      first.emit('modelFallbackRequested', {
+        ...request,
+        replayPrompt: { text: 'the unseen prompt', visibleInTranscript: false },
+      });
+      await reconnectableHarness.requestReconnect({ reason: 'fallback' });
+      second.emit('disconnected');
+      await vi.waitFor(() => expect(spawnHarness).toHaveBeenCalledTimes(3));
+
+      expect(spawnHarness.mock.calls[1]![0]).toEqual(
+        expect.objectContaining({
+          replayPrompt: { text: 'the unseen prompt', hidden: true },
+        }),
+      );
+      expect(spawnHarness.mock.calls[2]![0]).toEqual(
+        expect.objectContaining({ replayPrompt: undefined }),
+      );
+
+      reconnectableHarness.dispose();
+    });
+
+    it('hands the queue of the harness it replaces to the new one, as a model switch needs', async () => {
+      const first = new FakeHarness();
+      const second = new FakeHarness();
+      const harnesses = [first, second];
+      const queued = {
+        id: 'queued-during-switch',
+        text: 'sent while switching',
+        timestamp: 1,
+      };
+      const reconnectableHarness = new ReconnectableHarness({
+        logger: createLogger(),
+        spawnHarness: async () => ({
+          harness: harnesses.shift()!,
+          subprocess: createSubprocess() as never,
+        }),
+      });
+
+      await reconnectableHarness.start();
+      first.queuedMessageSnapshots = [queued];
+      await reconnectableHarness.requestReconnect({
+        reason: 'Switching to fallback model',
+      });
+      second.emit('connected');
+
+      await vi.waitFor(() =>
+        expect(second.sentCommands).toEqual([
+          {
+            commandName: TaskCommandName.RestoreQueuedMessages,
+            data: { queuedMessages: [queued] },
+          },
+        ]),
+      );
+
+      reconnectableHarness.dispose();
+    });
+
     it('records external reconnect requests with their reason', async () => {
       const harnesses = [new FakeHarness(), new FakeHarness()];
       const record = vi.fn();
@@ -991,5 +1165,254 @@ describe('ReconnectableHarness', () => {
 
       reconnectableHarness.dispose();
     });
+  });
+});
+
+describe('ReconnectableHarness secret values', () => {
+  class MaskingFakeHarness extends FakeHarness {
+    readonly secrets: string[][] = [];
+    addSecretValues(values: readonly string[]) {
+      this.secrets.push([...values]);
+    }
+  }
+
+  it('hands secrets that reach the task later to the live harness', async () => {
+    const live = new MaskingFakeHarness();
+    const reconnectable = new ReconnectableHarness({
+      logger: createLogger(),
+      spawnHarness: async () => ({
+        harness: live,
+        subprocess: createSubprocess() as never,
+      }),
+    });
+    await reconnectable.start();
+
+    reconnectable.addSecretValues(['late-secret-value-1']);
+
+    expect(live.secrets.at(-1)).toEqual(['late-secret-value-1']);
+  });
+
+  it('gives each harness it attaches every secret the task has, including one added while it was starting', async () => {
+    resetTaskSecretRegistryForTesting();
+    const first = new MaskingFakeHarness();
+    const second = new MaskingFakeHarness();
+    const harnesses = [first, second];
+    let spawns = 0;
+    const reconnectable = new ReconnectableHarness({
+      logger: createLogger(),
+      spawnHarness: async () => {
+        // Added after the spawner took its snapshot, before the harness is attached.
+        recordTaskSecretEntries([
+          ['LATE_KEY', `added-while-starting-${spawns}`],
+        ]);
+        return {
+          harness: harnesses[spawns++]!,
+          subprocess: createSubprocess() as never,
+        };
+      },
+    });
+
+    await reconnectable.start();
+    await reconnectable.requestReconnect({ reason: 'test' });
+
+    expect(first.secrets.at(-1)).toEqual(['added-while-starting-0']);
+    expect(second.secrets.at(-1)).toEqual([
+      'added-while-starting-0',
+      'added-while-starting-1',
+    ]);
+    resetTaskSecretRegistryForTesting();
+  });
+
+  it('ignores them when the live harness masks nothing, or none is live', async () => {
+    const reconnectable = new ReconnectableHarness({
+      logger: createLogger(),
+      spawnHarness: async () => ({
+        harness: new FakeHarness(),
+        subprocess: createSubprocess() as never,
+      }),
+    });
+
+    expect(() => reconnectable.addSecretValues(['x'])).not.toThrow();
+    await reconnectable.start();
+    expect(() => reconnectable.addSecretValues(['x'])).not.toThrow();
+  });
+});
+
+describe('ReconnectableHarness, a user stop during a model fallback', () => {
+  const request = {
+    role: 'coding',
+    fromModelId: 'cursor/composer-2.5',
+    toModelId: 'openai/gpt-5',
+    toReasoningEffort: null,
+    errorSummary: 'limit',
+    trigger: 'immediate',
+    replayPrompt: { text: 'the unseen prompt', visibleInTranscript: false },
+  } as const;
+  const recovery: TaskCommand = {
+    commandName: TaskCommandName.SendMessage,
+    data: { text: 'carry on' },
+  };
+  const userStop: TaskCommand = {
+    commandName: TaskCommandName.CancelTask,
+    data: { cancelledBy: { name: 'Test User', source: 'web' } },
+  };
+
+  async function setup() {
+    const harnesses = [new FakeHarness(), new FakeHarness(), new FakeHarness()];
+    const spawnHarness = vi.fn(async (_options?: unknown) => ({
+      harness: harnesses[spawnHarness.mock.calls.length - 1]!,
+      subprocess: createSubprocess() as never,
+    }));
+    const reconnectable = new ReconnectableHarness({
+      logger: createLogger(),
+      spawnHarness: spawnHarness as never,
+    });
+    await reconnectable.start();
+
+    return { harnesses, spawnHarness, reconnectable };
+  }
+
+  it('still switches the model but drops the replayed prompt and the recovery message', async () => {
+    const { harnesses, spawnHarness, reconnectable } = await setup();
+
+    harnesses[0]!.emit('modelFallbackRequested', request);
+    reconnectable.sendCommand(userStop);
+    await reconnectable.requestReconnect({
+      reason: 'fallback',
+      replayCommands: [recovery],
+    });
+
+    expect(spawnHarness).toHaveBeenCalledTimes(2);
+    expect(spawnHarness.mock.calls[1]![0]).toEqual(
+      expect.objectContaining({ replayPrompt: undefined }),
+    );
+    expect(harnesses[1]!.sentCommands).toEqual([]);
+  });
+
+  it('takes the recovery message back when the stop lands while the new harness starts', async () => {
+    const first = new FakeHarness();
+    const second = new FakeHarness();
+    const starting = deferred<void>();
+    const spawnHarness = vi
+      .fn()
+      .mockResolvedValueOnce({
+        harness: first,
+        subprocess: createSubprocess() as never,
+      })
+      .mockImplementationOnce(async () => {
+        await starting.promise;
+        return { harness: second, subprocess: createSubprocess() as never };
+      });
+    const reconnectable = new ReconnectableHarness({
+      logger: createLogger(),
+      spawnHarness,
+    });
+    await reconnectable.start();
+
+    first.emit('modelFallbackRequested', request);
+    const reconnecting = reconnectable.requestReconnect({
+      reason: 'fallback',
+      replayCommands: [recovery],
+    });
+    reconnectable.sendCommand(userStop);
+    starting.resolve();
+    await reconnecting;
+
+    expect(second.sentCommands).toEqual([]);
+  });
+
+  it('keeps the replay when the cancel is a steer, which carries no user', async () => {
+    const { harnesses, spawnHarness, reconnectable } = await setup();
+
+    harnesses[0]!.emit('modelFallbackRequested', request);
+    reconnectable.sendCommand({ commandName: TaskCommandName.CancelTask });
+    await reconnectable.requestReconnect({
+      reason: 'fallback',
+      replayCommands: [recovery],
+    });
+
+    expect(spawnHarness.mock.calls[1]![0]).toEqual(
+      expect.objectContaining({
+        replayPrompt: { text: 'the unseen prompt', hidden: true },
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(harnesses[1]!.sentCommands).toContainEqual(recovery),
+    );
+  });
+
+  it('keeps the replay when the stop came before the fallback was requested', async () => {
+    const { harnesses, spawnHarness, reconnectable } = await setup();
+
+    reconnectable.sendCommand(userStop);
+    harnesses[0]!.emit('modelFallbackRequested', request);
+    await reconnectable.requestReconnect({
+      reason: 'fallback',
+      replayCommands: [recovery],
+    });
+
+    expect(spawnHarness.mock.calls[1]![0]).toEqual(
+      expect.objectContaining({
+        replayPrompt: { text: 'the unseen prompt', hidden: true },
+      }),
+    );
+  });
+
+  it('forgets the stop once the replacement runs, so a later fallback replays', async () => {
+    const { harnesses, spawnHarness, reconnectable } = await setup();
+
+    harnesses[0]!.emit('modelFallbackRequested', request);
+    reconnectable.sendCommand(userStop);
+    await reconnectable.requestReconnect({ reason: 'fallback' });
+    harnesses[1]!.emit('modelFallbackRequested', request);
+    await reconnectable
+      .requestReconnect({ reason: 'fallback again' })
+      .catch(() => undefined);
+
+    expect(spawnHarness.mock.calls[2]?.[0]).toEqual(
+      expect.objectContaining({
+        replayPrompt: { text: 'the unseen prompt', hidden: true },
+      }),
+    );
+  });
+
+  it('keeps the stop when a turn starts before the replacement is up, so the stopped prompt is not replayed', async () => {
+    const { harnesses, spawnHarness, reconnectable } = await setup();
+
+    harnesses[0]!.emit('modelFallbackRequested', request);
+    reconnectable.sendCommand(userStop);
+    harnesses[0]!.emit('taskEvent', {
+      eventName: TaskEventName.TaskStarted,
+      payload: ['session-2'],
+    } as never);
+    await reconnectable.requestReconnect({
+      reason: 'fallback',
+      replayCommands: [recovery],
+    });
+
+    expect(spawnHarness.mock.calls[1]![0]).toEqual(
+      expect.objectContaining({ replayPrompt: undefined }),
+    );
+    expect(harnesses[1]!.sentCommands).toEqual([]);
+  });
+
+  it('forgets a fallback nobody served once a new turn starts', async () => {
+    const { harnesses, spawnHarness, reconnectable } = await setup();
+
+    harnesses[0]!.emit('modelFallbackRequested', request);
+    harnesses[0]!.emit('taskEvent', {
+      eventName: TaskEventName.TaskStarted,
+      payload: ['session-2'],
+    } as never);
+    reconnectable.sendCommand(userStop);
+    await reconnectable.requestReconnect({
+      reason: 'unrelated restart',
+      replayCommands: [recovery],
+    });
+
+    expect(spawnHarness).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() =>
+      expect(harnesses[1]!.sentCommands).toContainEqual(recovery),
+    );
   });
 });

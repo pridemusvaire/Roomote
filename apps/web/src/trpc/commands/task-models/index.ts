@@ -39,6 +39,7 @@ import {
   getEnabledTaskModels,
   isConfiguredEnvValue,
   isOpenAiCompatibleProviderId,
+  isTaskModelAllowedForRole,
   isTaskModelIdDisabled,
   normalizeOpenAiCompatibleConnectionSlug,
   normalizeModelFallbackConfig,
@@ -323,14 +324,15 @@ export async function getTaskModelSettingsCommand(
       settingsDefaultModelId: settings.defaultModelId,
       persisted: persistedRuntimeModelConfig,
     }),
-    helperModelOptions: catalog.map(
-      ({ id, displayName, family, metadata }) => ({
+    // Non-coding roles run on OpenCode, which cannot run Cursor models.
+    helperModelOptions: catalog
+      .filter((option) => isTaskModelAllowedForRole('helper', option.id))
+      .map(({ id, displayName, family, metadata }) => ({
         id,
         displayName,
         family,
         metadata: metadata ?? null,
-      }),
-    ),
+      })),
     codingModelRoutingRules: settings.codingModelRoutingRules ?? [],
     modelFallbacks,
   };
@@ -360,6 +362,11 @@ export async function updateModelFallbackConfigCommand(
     const model = enabledModels.get(fallback.modelId);
     if (!model)
       throw new Error(`Choose an enabled fallback model for ${role}.`);
+    if (!isTaskModelAllowedForRole(role, fallback.modelId)) {
+      throw new Error(
+        `Cursor models can only be used for coding, not as the ${role} fallback.`,
+      );
+    }
     const descriptor = TASK_MODEL_ROLE_DESCRIPTORS[role];
     const activeModel =
       runtimeModels[descriptor.runtimeStatusKey].effectiveModelId ??
@@ -1531,6 +1538,10 @@ export async function updateTaskModelSettingsCommand(
     ) {
       fieldErrors[descriptor.settingsModelInputKey] =
         descriptor.invalidModelMessage;
+    } else if (!isTaskModelAllowedForRole(role, modelId)) {
+      // Every non-coding role runs on OpenCode, which cannot run Cursor models.
+      fieldErrors[descriptor.settingsModelInputKey] =
+        'Cursor models can only be used as the default coding model.';
     }
   }
 

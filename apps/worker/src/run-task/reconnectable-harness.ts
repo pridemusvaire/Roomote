@@ -8,6 +8,7 @@ import {
   AcpPersistedEnvelope,
   AcpTurnCompletedEvent,
   TaskEvent,
+  TaskEventName,
   asRecord,
   asString,
   getRequestedDeploymentEnvVarNamesFromToolPayload,
@@ -17,6 +18,7 @@ import {
 import type { Harness } from '../sandbox-server';
 import { markExpectedSubprocessExitIfAlive } from '../sandbox-server/lib/harnesses/opencode-server/expected-exit';
 import type { DiagnosticEventRecorder } from './diagnostic-events';
+import type { ReplayPrompt } from './engine-handoff';
 import type {
   HarnessEvents,
   HarnessInferenceUsageEvent,
@@ -33,7 +35,11 @@ import {
   extractQueuedMessageId,
   extractQueuedMessageMove,
 } from '../sandbox-server/lib/harness';
+import { isUnrecoverableStartError } from '../sandbox-server/lib/harness-start-error';
+import { taskSecretValues } from '../lib/task-secret-registry';
 import type { HarnessLogger } from '../logging';
+import { buildTerminalErrorEvent } from '../sandbox-server/lib/terminal-error-event';
+import { FallbackStop } from './fallback-stop';
 
 interface SpawnHarnessResult {
   harness: Harness;
@@ -44,6 +50,11 @@ interface ReconnectableHarnessConfig {
   logger: HarnessLogger;
   spawnHarness: (options?: {
     initialSessionId?: string;
+    /**
+     * A prompt a model fallback is replaying that the previous model never
+     * saw. It is not in the persisted transcript yet.
+     */
+    replayPrompt?: ReplayPrompt;
   }) => Promise<SpawnHarnessResult>;
   maxReconnectAttempts?: number;
   /** Durable breadcrumbs for harness lifecycle transitions; observer-only. */
@@ -133,6 +144,8 @@ export class ReconnectableHarness
   private reconnectQueuedMessages: QueuedPromptMessageSnapshot[] | undefined;
   private cachedSupportsNativeTurnSteering = false;
   private pendingEnvVarRequest: HarnessPendingEnvVarRequest | null = null;
+  private replayPrompt: ReplayPrompt | undefined;
+  private readonly fallbackStop = new FallbackStop();
 
   constructor(config: ReconnectableHarnessConfig) {
     super();
@@ -145,7 +158,11 @@ export class ReconnectableHarness
 
   async start(options?: { initialSessionId?: string }): Promise<void> {
     this.updateSessionTracking(options?.initialSessionId);
-    const spawned = await this.spawnHarness(options);
+    const spawned = await this.spawnHarness({
+      ...options,
+      replayPrompt: this.replayPrompt,
+    });
+    this.replayPrompt = undefined;
     this.attachHarness(spawned);
   }
 
@@ -188,6 +205,10 @@ export class ReconnectableHarness
   }
 
   sendCommand(command: TaskCommand): boolean {
+    if (this.fallbackStop.stoppedBy(command, this.queuedCommands)) {
+      this.replayPrompt = undefined;
+    }
+
     this.updateSessionTrackingForCommand(command);
     this.updateReconnectReplayStateForCommand(command);
 
@@ -264,6 +285,15 @@ export class ReconnectableHarness
     );
   }
 
+  /**
+   * Hands secret values that reached the task after the harness started to
+   * the live harness, which masks them from then on. A harness spawned later
+   * is given the full set by the spawner.
+   */
+  addSecretValues(values: readonly string[]): void {
+    this.currentHarness?.addSecretValues?.(values);
+  }
+
   getCurrentSubprocess(): ResultPromise | null {
     return this.currentSubprocess;
   }
@@ -299,9 +329,15 @@ export class ReconnectableHarness
       },
     });
 
+    // A fallback the user stopped still switches the model, but nothing it
+    // would have replayed or recovered with is delivered.
+    const replayCommands = this.fallbackStop.stopped
+      ? undefined
+      : options.replayCommands;
+
     if (!this.currentHarness) {
-      if (options.replayCommands?.length) {
-        this.prependQueuedCommands(options.replayCommands);
+      if (replayCommands?.length) {
+        this.prependQueuedCommands(replayCommands);
       }
       await this.ensureReconnect();
       return;
@@ -310,7 +346,7 @@ export class ReconnectableHarness
     if (options.afterCurrentTurn && this.currentHarness.requestReconnect) {
       await this.currentHarness.requestReconnect({
         reason: options.reason,
-        replayCommands: options.replayCommands,
+        replayCommands,
         afterCurrentTurn: true,
       });
       return;
@@ -319,7 +355,7 @@ export class ReconnectableHarness
     await this.restartCurrentHarness({
       reason: options.reason,
       sessionId: this.latestSessionId,
-      replayCommands: options.replayCommands,
+      replayCommands,
     });
   }
 
@@ -330,6 +366,7 @@ export class ReconnectableHarness
     }
 
     this.detachCurrentHarness();
+    this.fallbackStop.end();
 
     this.currentHarness = harness;
     this.currentSubprocess = subprocess;
@@ -339,8 +376,18 @@ export class ReconnectableHarness
       harness.setCommandEnv?.(this.currentCommandEnv);
     }
 
+    // The spawner took its snapshot of the task's secrets before it awaited
+    // the engine switch and the start, and a secret added in that window went
+    // to the harness that was live then. From here later ones reach this
+    // harness through `addSecretValues`, so nothing falls between the two.
+    harness.addSecretValues?.(taskSecretValues());
+
     const listeners: BoundHarnessListeners = {
       taskEvent: (event) => {
+        if (event.eventName === TaskEventName.TaskStarted) {
+          this.fallbackStop.turnStarted();
+        }
+
         this.updateSessionTrackingForTaskEvent(event);
         this.emit('taskEvent', event);
         this.requestQueuedCommandFlush();
@@ -414,6 +461,11 @@ export class ReconnectableHarness
       },
       modelFallbackRequested: (request) => {
         if (harness !== this.currentHarness) return;
+        this.fallbackStop.begin();
+        this.replayPrompt = request.replayPrompt && {
+          text: request.replayPrompt.text,
+          hidden: request.replayPrompt.visibleInTranscript === false,
+        };
         this.emit('modelFallbackRequested', request);
       },
     };
@@ -563,7 +615,9 @@ export class ReconnectableHarness
       try {
         const spawned = await this.spawnHarness({
           initialSessionId: this.latestSessionId,
+          replayPrompt: this.replayPrompt,
         });
+        this.replayPrompt = undefined;
 
         this.logger.info(
           `[ReconnectableHarness] Reconnected harness on attempt ${attempt}/${this.maxReconnectAttempts} (sessionId=${this.latestSessionId ?? 'none'})`,
@@ -585,6 +639,19 @@ export class ReconnectableHarness
             error instanceof Error ? error.message : String(error)
           }`,
         );
+
+        if (isUnrecoverableStartError(error)) {
+          this.diagnosticEvents?.record({
+            kind: 'harness_reconnect_exhausted',
+            message: `Harness cannot restart: ${error.message}`,
+            details: {
+              sessionId: this.latestSessionId ?? null,
+              retryable: false,
+            },
+          });
+          this.failTask(error.message);
+          return;
+        }
 
         if (attempt >= this.maxReconnectAttempts) {
           break;
@@ -609,6 +676,20 @@ export class ReconnectableHarness
       });
       this.emit('disconnected');
     }
+  }
+
+  /**
+   * Ends the task at once with the reason in the transcript. For a failure
+   * that retrying cannot fix (a missing credential, a model switch that could
+   * not be applied), instead of retrying with backoff and then disconnecting
+   * with no explanation.
+   */
+  failTask(message: string): void {
+    this.emit(
+      'taskEvent',
+      buildTerminalErrorEvent(this.latestSessionId, message),
+    );
+    this.emit('disconnected');
   }
 
   private async flushQueuedCommands(): Promise<void> {
@@ -705,6 +786,7 @@ export class ReconnectableHarness
       nextQueuedCommands.push(cloneTaskCommandForReplay(command));
     }
 
+    this.fallbackStop.trackRecovery(nextQueuedCommands);
     this.queuedCommands.unshift(...nextQueuedCommands);
   }
 

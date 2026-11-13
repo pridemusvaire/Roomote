@@ -4,7 +4,7 @@ import { createSecretRedactor } from '@roomote/types';
 export const OPENCODE_TOOL_SAFETY_PLUGIN_SCRIPT = `import { realpath } from 'node:fs/promises';
 
 const secretRedactor = (${createSecretRedactor.toString()})();
-const { redactToolData } = (${createDiagnosticRedactor.toString()})(secretRedactor);
+const { redactToolData, sensitiveEnvValues } = (${createDiagnosticRedactor.toString()})(secretRedactor);
 
 const UNSUPPORTED_READ_IMAGE_EXTENSIONS = new Set(['.cur', '.ico']);
 
@@ -74,9 +74,7 @@ export const RoomoteOpenCodeToolSafety = async () => ({
     );
   },
   'tool.execute.after': async (_input, output) => {
-    const secretValues = Object.entries(process.env)
-      .filter(([name]) => secretRedactor.isSensitiveKey(name, 'environment'))
-      .map(([, value]) => value).filter((value) => typeof value === 'string');
+    const secretValues = sensitiveEnvValues(process.env);
     if (typeof output.output === 'string') output.output = redactToolData(output.output, secretValues);
     if (output.metadata) output.metadata = redactToolData(output.metadata, secretValues);
   },

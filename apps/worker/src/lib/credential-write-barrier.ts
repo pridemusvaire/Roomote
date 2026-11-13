@@ -12,8 +12,11 @@
  * surviving task can refresh tokens and reload its environment again.
  */
 
+import { ReleaseWaiters } from './release-waiters';
+
 let engaged = false;
 const inFlightWrites = new Set<Promise<unknown>>();
+let releaseWaiters = new ReleaseWaiters();
 
 export function isCredentialWriteBarrierEngaged(): boolean {
   return engaged;
@@ -38,6 +41,20 @@ export async function engageCredentialWriteBarrier(): Promise<void> {
  */
 export function releaseCredentialWriteBarrier(): void {
   engaged = false;
+  releaseWaiters.releaseAll();
+}
+
+/**
+ * Resolves `true` once credential writes are allowed again: at once when the
+ * barrier is not engaged, otherwise when it is released. Without a `signal` it
+ * never resolves if the sandbox is torn down with the barrier still engaged,
+ * so a caller that must not hang passes one: `false` means the signal aborted
+ * first.
+ */
+export function waitForCredentialWriteBarrierRelease(
+  signal?: AbortSignal,
+): Promise<boolean> {
+  return engaged ? releaseWaiters.wait(signal) : Promise.resolve(true);
 }
 
 /**
@@ -66,4 +83,5 @@ export async function runUnlessCredentialWriteBarrier<T>(
 export function resetCredentialWriteBarrierForTesting(): void {
   engaged = false;
   inFlightWrites.clear();
+  releaseWaiters = new ReleaseWaiters();
 }

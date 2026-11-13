@@ -226,10 +226,13 @@ export function StepInferenceProvider({
   const additionalEnvFields = selectedProviderStatus?.additionalEnvFields ?? [];
   // Hidden (hosting-managed) providers are never user-selectable, even when
   // connected — the catalog `hidden` flag is the single source of that rule.
+  // Providers that need another provider (Cursor) are added in Settings.
   const sortedModelProviders = useMemo(
     () =>
       modelSetup.providers
-        .filter((provider) => !provider.hidden)
+        .filter(
+          (provider) => !provider.hidden && !provider.requiresOtherProvider,
+        )
         .sort((left, right) => left.label.localeCompare(right.label)),
     [modelSetup.providers],
   );

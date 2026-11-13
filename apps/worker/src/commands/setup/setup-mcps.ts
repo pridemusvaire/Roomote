@@ -20,6 +20,10 @@ import {
 } from '@roomote/types';
 
 import {
+  MASK_SECRETS_FILE_ENV,
+  MASK_SECRETS_FILE_PATH,
+} from '../../lib/mask-secrets-file';
+import {
   collectEnvVarReferences,
   redactEnvVarReferences,
   substituteEnvVars,
@@ -340,6 +344,14 @@ export function resolveBuiltInMcpServers(
   environmentMcpServers?: EnvironmentMcpServers,
   operatorEnvVars?: Record<string, string>,
   deploymentMcpServers?: EnvironmentMcpServers,
+  options?: {
+    /**
+     * Cursor tasks only: the Roomote server keeps the task's secret values
+     * out of what its tools send or store. OpenCode has its own plugin for
+     * that and gets no file.
+     */
+    maskSecretValues?: boolean;
+  },
 ): Record<string, McpServerConfig> {
   // The extension's StdioClientTransport only inherits a minimal set of
   // env vars (HOME, PATH, SHELL, TERM, USER) via getDefaultEnvironment().
@@ -397,6 +409,9 @@ export function resolveBuiltInMcpServers(
         name === 'roomote'
           ? {
               ...stdioEnvExtras,
+              ...(options?.maskSecretValues
+                ? { [MASK_SECRETS_FILE_ENV]: MASK_SECRETS_FILE_PATH }
+                : {}),
               ...roomoteEnv,
               ...(brainAvailable ? { ROOMOTE_BRAIN_AVAILABLE: 'true' } : {}),
               ...config.env,

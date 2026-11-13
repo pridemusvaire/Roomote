@@ -316,6 +316,52 @@ describe('resolveOpenCodeSmallModel', () => {
     });
   });
 
+  it('never resolves a Cursor coding model as the helper model', async () => {
+    process.env = {
+      ...originalEnv,
+      R_SMALL_MODEL: 'openrouter/openai/gpt-5.6-luna',
+      R_MODEL: 'cursor/composer-2.5',
+    };
+    mockResolveEffectiveModelRuntimeEnv.mockResolvedValue({
+      R_MODEL: 'cursor/composer-2.5',
+    });
+
+    // The helper role is left at "Same as coding model"; the coding model is
+    // a Cursor model OpenCode cannot run, so it behaves as if coding were unset.
+    await expect(resolveNonTaskHelperModel()).resolves.toEqual({
+      model: 'openrouter/openai/gpt-5.6-luna',
+      catalogModelId: 'openrouter/openai/gpt-5.6-luna',
+    });
+  });
+
+  it('keeps the helper role on its own model when coding is a Cursor model', async () => {
+    mockResolveEffectiveModelRuntimeEnv.mockResolvedValue({
+      R_MODEL: 'cursor/composer-2.5',
+      R_SMALL_MODEL: 'openrouter/openai/gpt-5.6-luna',
+    });
+
+    await expect(resolveNonTaskHelperModel()).resolves.toEqual({
+      model: 'openrouter/openai/gpt-5.6-luna',
+      catalogModelId: 'openrouter/openai/gpt-5.6-luna',
+    });
+  });
+
+  it('does not resolve a Cursor helper model either', async () => {
+    process.env = {
+      ...originalEnv,
+      R_SMALL_MODEL: 'openrouter/openai/gpt-5.6-luna',
+    };
+    mockResolveEffectiveModelRuntimeEnv.mockResolvedValue({
+      R_MODEL: 'openrouter/anthropic/claude-sonnet-4',
+      R_SMALL_MODEL: 'cursor/composer-2.5',
+    });
+
+    await expect(resolveNonTaskHelperModel()).resolves.toEqual({
+      model: 'openrouter/anthropic/claude-sonnet-4',
+      catalogModelId: 'openrouter/anthropic/claude-sonnet-4',
+    });
+  });
+
   it('reuses a managed OpenCode SDK server for matching structured object calls', async () => {
     process.env = {
       ...originalEnv,

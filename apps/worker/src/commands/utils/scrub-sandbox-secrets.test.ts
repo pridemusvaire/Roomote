@@ -39,6 +39,7 @@ const TOKEN_ENV_PATHS = [
 
 const EXPECTED_REMOVED_PATHS = [
   '/home/testuser/.roomote/gh-token',
+  '/home/testuser/.roomote/mask-secrets.json',
   '/home/testuser/.roomote/source-control-repository-credentials.tsv',
   '/home/testuser/.roomote/gitlab-token',
   '/home/testuser/.roomote/gitlab-repository-credentials.tsv',

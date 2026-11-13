@@ -47,7 +47,9 @@ function makeTaskRun(overrides: Record<string, unknown> = {}) {
     userId: 'user_456',
     type: 'Task',
     status: 'Processing',
-    payload: {},
+    payload: {
+      harnessModelOverrides: { 'opencode-server': 'cursor/composer-2.5' },
+    },
     ...overrides,
   };
 }
@@ -103,6 +105,9 @@ describe('fetchSnapshotEnv', () => {
     expect(mockFetchResolvedRuntimeEnvVars).toHaveBeenCalledWith(undefined, {
       sourceControlProvider: ['github'],
       includeSandboxOpenRouterApiKey: false,
+      taskPayload: {
+        harnessModelOverrides: { 'opencode-server': 'cursor/composer-2.5' },
+      },
     });
 
     // Verify createSourceControlTokenForTaskRun was called with the task run.
@@ -141,6 +146,9 @@ describe('fetchSnapshotEnv', () => {
     expect(mockFetchResolvedRuntimeEnvVars).toHaveBeenCalledWith(undefined, {
       sourceControlProvider: ['github'],
       includeSandboxOpenRouterApiKey: false,
+      taskPayload: {
+        harnessModelOverrides: { 'opencode-server': 'cursor/composer-2.5' },
+      },
     });
   });
 

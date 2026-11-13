@@ -8,12 +8,19 @@ import {
 import { appRouter } from '../../routers';
 import type { Context } from '../../trpc';
 
-const { mockRefreshGitHubToken, mockApplyDeploymentEnvVarsReload } = vi.hoisted(
-  () => ({
-    mockRefreshGitHubToken: vi.fn(),
-    mockApplyDeploymentEnvVarsReload: vi.fn(),
-  }),
-);
+const {
+  mockRefreshGitHubToken,
+  mockApplyDeploymentEnvVarsReload,
+  mockRefreshMaskSecretsFile,
+} = vi.hoisted(() => ({
+  mockRefreshGitHubToken: vi.fn(),
+  mockApplyDeploymentEnvVarsReload: vi.fn(),
+  mockRefreshMaskSecretsFile: vi.fn(),
+}));
+
+vi.mock('../../../lib/task-secrets', () => ({
+  refreshMaskSecretsFile: mockRefreshMaskSecretsFile,
+}));
 
 vi.mock('../../../run-task/polling/github-token-refresh', () => ({
   refreshGitHubToken: mockRefreshGitHubToken,
@@ -65,6 +72,29 @@ describe('restoreScrubbedCredentials procedure', () => {
       names: ['OPENAI_API_KEY'],
       envVars: { OPENAI_API_KEY: 'fresh-openai-key' },
     });
+    mockRefreshMaskSecretsFile.mockResolvedValue(undefined);
+  });
+
+  it('writes the mask secrets file again, which the snapshot scrub removed, once the barrier is released', async () => {
+    await engageCredentialWriteBarrier();
+    let barrierEngagedAtRefresh: boolean | undefined;
+    mockRefreshMaskSecretsFile.mockImplementation(async () => {
+      barrierEngagedAtRefresh = isCredentialWriteBarrierEngaged();
+    });
+
+    await createCaller().commands.restoreScrubbedCredentials();
+
+    expect(mockRefreshMaskSecretsFile).toHaveBeenCalledTimes(1);
+    expect(barrierEngagedAtRefresh).toBe(false);
+  });
+
+  it('still reloads the env when the mask secrets file cannot be written, and reports the failure', async () => {
+    mockRefreshMaskSecretsFile.mockRejectedValue(new Error('disk full'));
+
+    await expect(
+      createCaller().commands.restoreScrubbedCredentials(),
+    ).rejects.toThrow('rewrite the secret values file');
+    expect(mockApplyDeploymentEnvVarsReload).toHaveBeenCalled();
   });
 
   it('releases the barrier and restores token files and env vars', async () => {

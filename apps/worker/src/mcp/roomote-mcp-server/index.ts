@@ -3,10 +3,7 @@
 import { pathToFileURL } from 'node:url';
 
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import {
-  NullableOptionalsMcpServer,
-  withNullableOptionals,
-} from '@roomote/cloud-agents/mcp-nullable-optionals';
+import { withNullableOptionals } from '@roomote/cloud-agents/mcp-nullable-optionals';
 import { z } from 'zod';
 import {
   CALL_INTEGRATION_TOOL_TOOL,
@@ -51,6 +48,7 @@ import {
   installWorkerFatalProcessHandlers,
 } from '../../monitoring/sentry.js';
 
+import { MaskingMcpServer } from './masking-mcp-server.js';
 import { handleCreatePlan } from './create-plan.js';
 import {
   callOnDemandIntegrationTool,
@@ -138,7 +136,7 @@ export {
   automationWorkItemsResultHasSubmittedWorkItems,
 } from './automation-slack-summary-state.js';
 
-export const roomoteMcpServer = new NullableOptionalsMcpServer({
+export const roomoteMcpServer = new MaskingMcpServer({
   name: 'roomote-mcp-server',
   version: '1.0.0',
 });

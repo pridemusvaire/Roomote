@@ -390,6 +390,7 @@ describe('SETUP_MODEL_PROVIDER_CATALOG', () => {
       'xai',
       'zai',
       'zai-coding-plan',
+      'cursor',
       'github-copilot',
       'openai-compatible',
       'litellm',

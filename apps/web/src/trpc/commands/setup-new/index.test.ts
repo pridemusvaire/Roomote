@@ -303,6 +303,7 @@ import {
   saveSetupNewAuthConfigCommand,
   saveSetupNewComputeConfigCommand,
   saveSetupNewComputeProviderChoiceCommand,
+  saveSetupNewModelConfigCommand,
   saveSetupNewSourceControlConfigCommand,
   saveSetupNewSourceControlProviderChoiceCommand,
   startSetupRecommendationsCommand,
@@ -1918,5 +1919,16 @@ describe('chooseSetupTrialInferenceCommand', () => {
     expect(
       inserted.find((values) => 'runtimeModelConfig' in values),
     ).toBeDefined();
+  });
+});
+
+describe('setup-new model config command', () => {
+  it('rejects Cursor, which cannot be the only inference provider', async () => {
+    await expect(
+      saveSetupNewModelConfigCommand(buildMockAuth(), {
+        provider: 'cursor',
+        apiKey: 'key',
+      }),
+    ).rejects.toThrow(/Cursor.*another provider/i);
   });
 });

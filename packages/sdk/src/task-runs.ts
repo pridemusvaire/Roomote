@@ -259,6 +259,10 @@ export const renderSlackLiveTaskCard = (
   options: AppRouterInput['taskRuns']['renderSlackLiveTaskCard'],
 ) => client.taskRuns.renderSlackLiveTaskCard.mutate(options);
 
+export const getTranscriptTail = (
+  input: AppRouterInput['taskRuns']['getTranscriptTail'],
+) => client.taskRuns.getTranscriptTail.query(input);
+
 export const getResolvedGitAuthor = (
   options: AppRouterInput['taskRuns']['getResolvedGitAuthor'],
 ) => client.taskRuns.getResolvedGitAuthor.query(options);

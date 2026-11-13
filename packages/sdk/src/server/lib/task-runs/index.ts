@@ -22,6 +22,7 @@ export * from './missing-chat-closeout-fallback';
 export * from './record-task-inference-usage';
 export * from './record-compute-provider-usage';
 export * from './has-message-from-source';
+export * from './get-task-transcript-tail';
 export * from './set-task-harness-session-id';
 export * from './slack-pr-inactivity-check';
 export * from './pr-review-notification';

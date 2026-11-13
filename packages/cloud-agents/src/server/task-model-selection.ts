@@ -12,6 +12,7 @@ import {
   getDefaultTaskModelId,
   getDisplayModelProviderId,
   getTaskModelCatalog,
+  isCursorTaskModelId,
   isReasoningEffort,
   isTaskModelIdAllowed,
   normalizeDeploymentModelConfig,
@@ -69,6 +70,15 @@ export async function applyTaskModelSelectionToRun(options: {
   reasoningEffort: ReasoningEffort | null;
   expectedModel?: string;
 }): Promise<{ stampedTaskModel: string | null; applied: boolean }> {
+  // Only the coding role can run on Cursor's agent; every other role runs on
+  // OpenCode, which cannot run a Cursor model.
+  if (options.role !== 'coding' && isCursorTaskModelId(options.model)) {
+    throw new TaskModelSelectionError(
+      `Cursor models can only be used as the coding model, not for the ${options.role} role.`,
+      'invalid_model',
+    );
+  }
+
   const deployment = await db.query.deploymentSettings.findFirst({
     where: eq(deploymentSettings.id, DEFAULT_DEPLOYMENT_ID),
     columns: {

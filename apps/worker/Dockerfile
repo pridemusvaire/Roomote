@@ -10,6 +10,12 @@ LABEL org.opencontainers.image.source=https://github.com/RooCodeInc/Roomote
 
 ARG AGENT_BROWSER_VERSION=0.37.0
 ARG OPENCODE_CLI_VERSION=1.18.30
+# Cursor's agent CLI (`cursor-agent acp`) runs cursor/<model> coding tasks. The
+# release tarballs are not published with a checksum file, so the sha256 of each
+# architecture's package is pinned here and verified at build time.
+ARG CURSOR_AGENT_VERSION=2026.11.11-b912975
+ARG CURSOR_AGENT_SHA256_X64=be01f42ad334f81d05a9992fcf060a52cc746f52cc451e849eb652146a6e3c91
+ARG CURSOR_AGENT_SHA256_ARM64=f068af64ed91b5304605976586f690579679f740a41f388091a6b3a2e776987c
 ARG RELEASE_PRODUCT_VERSION
 ARG FFMPEG_INSTALLER_VERSION=1.1.0
 # @ffprobe-installer (not ffprobe-static, which ships no linux/arm64 binary
@@ -316,6 +322,29 @@ RUN sudo chmod +x /usr/local/bin/opencode \
   && sudo cp /usr/local/bin/opencode "$HOME/.local/bin/opencode" \
   && sudo chown roomote:roomote "$HOME/.local/bin/opencode" \
   && chmod +x "$HOME/.local/bin/opencode"
+
+# Install Cursor's agent CLI from its pinned release package (bundled Node
+# runtime, entry point is a shell wrapper that resolves symlinks). Installed
+# under /opt so every user can run it. `cursor-agent acp` never starts
+# Cursor's background self-update (that lives only in the interactive/print
+# entry point), and a self-update would write under $HOME/.local/share, not
+# /opt, so the pinned version stays in place.
+RUN ARCH="$(dpkg --print-architecture)" \
+  && case "$ARCH" in \
+    amd64) CURSOR_ARCH="x64"; CURSOR_SHA256="${CURSOR_AGENT_SHA256_X64}" ;; \
+    arm64) CURSOR_ARCH="arm64"; CURSOR_SHA256="${CURSOR_AGENT_SHA256_ARM64}" ;; \
+    *) echo "Unsupported architecture for cursor-agent: $ARCH" >&2; exit 1 ;; \
+  esac \
+  && curl -fsSL "https://downloads.cursor.com/lab/${CURSOR_AGENT_VERSION}/linux/${CURSOR_ARCH}/agent-cli-package.tar.gz" -o /tmp/cursor-agent.tar.gz \
+  && echo "${CURSOR_SHA256}  /tmp/cursor-agent.tar.gz" | sha256sum -c - \
+  && sudo mkdir -p "/opt/cursor-agent/${CURSOR_AGENT_VERSION}" \
+  && sudo tar -xzf /tmp/cursor-agent.tar.gz --strip-components=1 --no-same-owner \
+    -C "/opt/cursor-agent/${CURSOR_AGENT_VERSION}" \
+  && sudo chmod -R a+rX "/opt/cursor-agent/${CURSOR_AGENT_VERSION}" \
+  && sudo ln -sfn "/opt/cursor-agent/${CURSOR_AGENT_VERSION}/cursor-agent" /usr/local/bin/cursor-agent \
+  && rm -f /tmp/cursor-agent.tar.gz \
+  && test -x /usr/local/bin/cursor-agent \
+  && cursor-agent --version | grep -qF "${CURSOR_AGENT_VERSION}"
 
 # The controller uses this image as a short-lived, NET_ADMIN-only helper to
 # install metadata blackhole routes in each worker's network namespace. Keep

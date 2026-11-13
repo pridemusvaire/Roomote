@@ -846,6 +846,44 @@ describe('ModelSettingsSection', () => {
     expect(screen.queryByRole('option', { name: 'GPT 5.4' })).toBeNull();
   });
 
+  it('offers Cursor models as the coding fallback only', () => {
+    const cursorModel = {
+      id: 'cursor/composer-2.5',
+      displayName: 'Composer 2.5',
+      family: 'Composer',
+      metadata: null,
+    };
+    const data = buildSettingsData();
+    settingsData.current = {
+      ...data,
+      models: [
+        ...data.models,
+        { ...cursorModel, enabled: true, isDefault: false },
+      ],
+      // A stale server could still list Cursor for helper roles.
+      helperModelOptions: [...data.helperModelOptions, cursorModel],
+      modelFallbacks: { enabled: true, roles: {} },
+    };
+
+    renderModelSettingsSection();
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Helper model fallback model and reasoning',
+      }),
+    );
+    expect(screen.queryByRole('option', { name: 'Composer 2.5' })).toBeNull();
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Coding model fallback model and reasoning',
+      }),
+    );
+    expect(
+      screen.getByRole('option', { name: 'Composer 2.5' }),
+    ).toBeInTheDocument();
+  });
+
   it('adds, saves, edits, and removes coding-model routing rules', async () => {
     settingsData.current = buildSettingsData();
     renderModelSettingsSection();
@@ -1141,8 +1179,15 @@ describe('ModelSettingsSection', () => {
     expect(within(metadata).getByText('Price')).toBeInTheDocument();
     expect(within(metadata).getByText('Updated')).toBeInTheDocument();
 
+    // The label formats the number in the viewer's locale, so the expected
+    // text is formatted the same way instead of assuming en-US grouping. A
+    // locale may group with non-breaking spaces, which `\s` matches.
+    const formatted = (1_050_000)
+      .toLocaleString()
+      .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      .replace(/\s/g, '\\s');
     const context = within(metadata).getByLabelText(
-      /Context window: 1,050,000 tokens/,
+      new RegExp(`Context window: ${formatted} tokens`),
     );
     expect(context).toHaveAttribute('tabindex', '0');
 

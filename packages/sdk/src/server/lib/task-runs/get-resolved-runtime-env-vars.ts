@@ -24,5 +24,6 @@ export async function getResolvedRuntimeEnvVars(
     sourceControlProvider: resolveSourceControlProviderFromPayload(
       taskRun.payload,
     ),
+    taskPayload: taskRun.payload,
   });
 }

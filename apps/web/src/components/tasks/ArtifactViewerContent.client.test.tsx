@@ -782,8 +782,13 @@ describe('ArtifactViewerContent', () => {
       />,
     );
 
+    // The limit is formatted in the viewer's locale. The element's text has
+    // its whitespace normalized, so the expected text is normalized the same
+    // way (a locale may group digits with non-breaking spaces).
+    const cellLimit = (2_000).toLocaleString().replace(/\s+/g, ' ');
+
     expect(screen.getByRole('status')).toHaveTextContent(
-      'Preview is limited to 200 rows, 50 columns, and 2,000 characters per cell.',
+      `Preview is limited to 200 rows, 50 columns, and ${cellLimit} characters per cell.`,
     );
     expect(screen.getAllByRole('row')).toHaveLength(201);
   });

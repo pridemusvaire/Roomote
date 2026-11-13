@@ -146,6 +146,8 @@ function makeSnapshotResumeRun(
       repo: 'owner/repo',
       environmentId: 'env-1',
       selectedRepositories: ['acme/api', 'acme/web'],
+      // A model the task switched to mid-run, before the snapshot.
+      harnessModelOverrides: { 'opencode-server': 'cursor/composer-2.5' },
     },
     result: null,
     task: makeTaskRow(taskOverrides),
@@ -259,6 +261,9 @@ describe('dequeueResumeTaskRun', () => {
       {
         sourceControlProvider: ['gitlab', 'github'],
         includeSandboxOpenRouterApiKey: true,
+        taskPayload: expect.objectContaining({
+          harnessModelOverrides: { 'opencode-server': 'cursor/composer-2.5' },
+        }),
       },
     );
     expect(result?.harnessInstructions).toBe('preserved instructions');

@@ -144,4 +144,32 @@ describe('ModelSelect', () => {
     expect(screen.getByText('Grok 4.5 (Default)')).toBeTruthy();
     expect(screen.getByText('Claude Sonnet 5')).toBeTruthy();
   });
+
+  it('lists Cursor models unless the picker is for a non-coding role', () => {
+    launchModelsData.current = {
+      defaultModelId: 'openrouter/x-ai/grok-4.5',
+      chatgptConnected: false,
+      models: [
+        { id: 'openrouter/x-ai/grok-4.5', displayName: 'Grok 4.5' },
+        { id: 'cursor/composer-2.5', displayName: 'Composer 2.5' },
+      ],
+    };
+
+    const { unmount } = render(
+      <ModelSelect value="openrouter/x-ai/grok-4.5" onValueChange={vi.fn()} />,
+    );
+    expect(screen.getByText('Composer 2.5')).toBeTruthy();
+    unmount();
+
+    // Only the coding role can run Cursor models; the others run on OpenCode.
+    render(
+      <ModelSelect
+        codingOnlyModelsHidden
+        value="openrouter/x-ai/grok-4.5"
+        onValueChange={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText('Composer 2.5')).toBeNull();
+    expect(screen.getByText('Grok 4.5')).toBeTruthy();
+  });
 });

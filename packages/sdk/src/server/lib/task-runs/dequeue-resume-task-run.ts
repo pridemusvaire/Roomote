@@ -457,6 +457,7 @@ export const dequeueResumeTaskRun = async (
         includeSandboxOpenRouterApiKey: Boolean(
           result.taskRun.payload.environmentId,
         ),
+        taskPayload: result.taskRun.payload,
       });
     } catch (error) {
       const message =

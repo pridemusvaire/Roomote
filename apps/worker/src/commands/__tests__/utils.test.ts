@@ -8,6 +8,10 @@ import {
   isValidEnvVarName,
 } from '../utils/env-vars';
 import { TASK_MODEL_ROLE_DESCRIPTORS } from '@roomote/types';
+import {
+  resetTaskSecretsForTesting,
+  taskSecretValues,
+} from '../../lib/task-secrets';
 import type { TaskRun } from '@roomote/sdk/client';
 
 vi.mock('fs', () => ({
@@ -64,6 +68,7 @@ const originalPreviewProxySubdomainSuffix =
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resetTaskSecretsForTesting();
   vi.mocked(fs.existsSync).mockReturnValue(false);
   process.env.PATH = DEFAULT_PATH;
   delete process.env.ROOMOTE_AUTH_BYPASS_VALUE;
@@ -103,6 +108,38 @@ afterEach(() => {
 });
 
 describe('injectEnvVars', () => {
+  it('makes the source-control tokens it writes secrets the task masks, repository credentials included', async () => {
+    await injectEnvVars({ FOO: 'bar' }, undefined, {
+      sourceControlToken: {
+        provider: 'gitlab',
+        token: 'gitlab-token-value',
+        envVar: 'GITLAB_TOKEN',
+        envVars: { GITLAB_TOKEN: 'gitlab-token-value' },
+        gitCredentials: [
+          {
+            host: 'gitlab.example.com',
+            repositoryFullName: 'acme/web',
+            username: 'oauth2',
+            token: 'repo-credential-value',
+          },
+        ],
+      },
+    });
+
+    expect(taskSecretValues().sort()).toEqual([
+      'gitlab-token-value',
+      'repo-credential-value',
+    ]);
+  });
+
+  it('leaves the secrets alone when it is told not to sync token files', async () => {
+    await injectEnvVars({ GITLAB_TOKEN: 'gitlab-token-value' }, undefined, {
+      syncSourceControlTokenFiles: false,
+    });
+
+    expect(taskSecretValues()).toEqual([]);
+  });
+
   it('omits inherited model transport values from the environment shell file without mutating runtime env', async () => {
     const inheritedRoleEnvVars = Object.fromEntries(
       Object.values(TASK_MODEL_ROLE_DESCRIPTORS).flatMap((descriptor) => [

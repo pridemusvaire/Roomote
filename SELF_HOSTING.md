@@ -427,6 +427,7 @@ common provider keys into worker containers:
   with `ZAI_CODING_PLAN_REGION`)
 - `OPENCODE_API_KEY`
 - `OPENCODE_GO_API_KEY` (OpenCode Go subscription, `opencode-go/...` models)
+- `CURSOR_API_KEY` (Cursor, `cursor/...` models, runs on the Cursor agent)
 
 If your provider uses another env var name, list it in
 `R_MODEL_ENV_KEYS`:

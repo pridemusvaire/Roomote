@@ -4,6 +4,7 @@ import {
   releaseCredentialWriteBarrier,
   resetCredentialWriteBarrierForTesting,
   runUnlessCredentialWriteBarrier,
+  waitForCredentialWriteBarrierRelease,
 } from './credential-write-barrier';
 
 describe('credential write barrier', () => {
@@ -80,5 +81,46 @@ describe('credential write barrier', () => {
 
     await expect(engageCredentialWriteBarrier()).resolves.toBeUndefined();
     await expect(failingWrite).rejects.toThrow('write exploded');
+  });
+
+  describe('waitForCredentialWriteBarrierRelease', () => {
+    it('resolves at once while the barrier is not engaged', async () => {
+      await expect(waitForCredentialWriteBarrierRelease()).resolves.toBe(true);
+    });
+
+    it('stays pending while engaged and resolves when the barrier is released', async () => {
+      await engageCredentialWriteBarrier();
+      let released = false;
+      const waiting = waitForCredentialWriteBarrierRelease().then((result) => {
+        released = result;
+      });
+
+      await Promise.resolve();
+      expect(released).toBe(false);
+
+      releaseCredentialWriteBarrier();
+      await waiting;
+
+      expect(released).toBe(true);
+    });
+
+    it('gives up, reporting false, when the signal aborts first', async () => {
+      await engageCredentialWriteBarrier();
+      const controller = new AbortController();
+      const waiting = waitForCredentialWriteBarrierRelease(controller.signal);
+
+      controller.abort();
+
+      await expect(waiting).resolves.toBe(false);
+    });
+
+    it('gives up at once when the signal is already aborted, and leaves no waiter behind', async () => {
+      await engageCredentialWriteBarrier();
+
+      await expect(
+        waitForCredentialWriteBarrierRelease(AbortSignal.abort()),
+      ).resolves.toBe(false);
+      releaseCredentialWriteBarrier();
+    });
   });
 });

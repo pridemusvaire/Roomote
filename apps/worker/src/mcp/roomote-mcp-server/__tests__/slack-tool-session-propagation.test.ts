@@ -1,3 +1,9 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { writeMaskSecretsFile } from '../../../lib/mask-secrets-file';
+
 type RegisteredTool = {
   name: string;
   handler?: (
@@ -120,6 +126,58 @@ describe('roomote MCP Slack tool session propagation', () => {
       tool: 'send_chat_reply',
       replyPurpose: 'closeout',
       sessionId: 'thread-child',
+    });
+  });
+
+  describe('when the task has secret values to mask', () => {
+    const secret = 'glpat-agent-saw-this-token';
+    let dir: string;
+
+    beforeEach(async () => {
+      dir = mkdtempSync(join(tmpdir(), 'chat-mask-'));
+      const file = join(dir, 'mask-secrets.json');
+      writeMaskSecretsFile([{ name: 'GITLAB_TOKEN', value: secret }], file);
+      vi.resetModules();
+      mockState.registeredTools.length = 0;
+      process.env.ROOMOTE_MASK_SECRETS_FILE = file;
+      await import('../index.js');
+    });
+
+    afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+    it('masks them out of a chat reply before it is posted', async () => {
+      mockState.handleSendChatReply.mockResolvedValue({
+        content: [{ type: 'text', text: JSON.stringify({ success: true }) }],
+      });
+
+      await getRegisteredTool('send_chat_reply').handler!(
+        { message: `the token is ${secret}`, purpose: 'closeout' },
+        { sessionId: 'thread-child' },
+      );
+
+      expect(mockState.handleSendChatReply.mock.calls[0]![0].summary).toBe(
+        'the token is [redacted]',
+      );
+    });
+
+    it('masks them out of a report to the parent Session', async () => {
+      vi.resetModules();
+      mockState.registeredTools.length = 0;
+      mockState.handleReportToParentSession.mockResolvedValue({
+        content: [{ type: 'text', text: JSON.stringify({ success: true }) }],
+      });
+      process.env.ROOMOTE_TASK_RUN_ID = '42';
+      process.env.ROOMOTE_FAST_AGENT_CHILD = 'true';
+      await import('../index.js');
+
+      await getRegisteredTool('report_to_parent_session').handler!(
+        { message: `found ${secret}`, purpose: 'progress' },
+        { sessionId: 'fast-child-session' },
+      );
+
+      expect(
+        mockState.handleReportToParentSession.mock.calls[0]![0].message,
+      ).toBe('found [redacted]');
     });
   });
 

@@ -47,6 +47,7 @@ const {
   mkdirSyncMock,
   recordSandboxPromptSlackTurnStartMock,
   recordChatTurnStartMock,
+  setChatParentThreadMock,
   writeFileSyncMock,
   installZeroCliMock,
 } = vi.hoisted(() => ({
@@ -115,6 +116,7 @@ const {
   mkdirSyncMock: vi.fn(),
   recordSandboxPromptSlackTurnStartMock: vi.fn(),
   recordChatTurnStartMock: vi.fn(),
+  setChatParentThreadMock: vi.fn(),
   writeFileSyncMock: vi.fn(),
   installZeroCliMock: vi.fn().mockResolvedValue(undefined),
 }));
@@ -138,6 +140,7 @@ vi.mock('../../commands/utils/scrub-sandbox-secrets', () => ({
 
 vi.mock('../../mcp/roomote-mcp-server/chat-reply-satisfaction', () => ({
   recordChatTurnStart: recordChatTurnStartMock,
+  setChatParentThread: setChatParentThreadMock,
 }));
 
 type FakeHarnessManager = EventEmitter & {
@@ -193,10 +196,20 @@ vi.mock('@roomote/cloud-agents', () => ({
   resolveRoomoteReleaseVersion: vi.fn(() => '0.40.2'),
 }));
 
+const { findFirstByIdMock, reloadModelProviderEnvMock } = vi.hoisted(() => ({
+  findFirstByIdMock: vi.fn(),
+  reloadModelProviderEnvMock: vi.fn(),
+}));
+
+vi.mock('../reload-model-provider-env', () => ({
+  createModelProviderEnvReloader: vi.fn(() => reloadModelProviderEnvMock),
+}));
+
 vi.mock('@roomote/sdk/client', () => ({
   instanceSkills: { listForRuntime: listInstanceSkillsMock },
   sdk: {
     taskRuns: {
+      findFirstById: findFirstByIdMock,
       activateSlackReplyTarget: taskRunsActivateSlackReplyTargetMock,
       clearActiveSlackReplyTarget: taskRunsClearActiveSlackReplyTargetMock,
       done: taskRunsDoneMock,
@@ -329,6 +342,7 @@ import { resolveWorkerReleaseMetadata } from '../../monitoring/worker-release-me
 import type { HarnessManagerCallbacks } from '../../sandbox-server/lib/harness-manager';
 import { getDefaultKeepaliveMs } from '../completion';
 import { setupJevgrep } from '../jevgrep';
+import { createModelProviderEnvReloader } from '../reload-model-provider-env';
 import { runTask } from '../run-task';
 import type { EnvironmentSetupSettledOutcome } from '../types';
 
@@ -449,6 +463,117 @@ describe('runTask', () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
+  });
+
+  describe('applying a task model switch', () => {
+    async function startTask() {
+      const requestReconnect = vi.fn(async () => {});
+      const taskRun = {
+        id: 153,
+        taskId: 'task-153',
+        payloadKind: TaskPayloadKind.StandardTask,
+        harness: 'opencode-server',
+        payload: {},
+        result: null,
+      };
+      createHarnessMock.mockResolvedValue({
+        harness: { on: vi.fn(), isConnected: false, requestReconnect },
+        getSubprocess: vi.fn(() => ({})),
+        unsubscribe: vi.fn().mockResolvedValue(undefined),
+        flushPendingCompletionEvents: flushPendingCompletionEventsMock,
+      });
+      findFirstByIdMock.mockResolvedValue({
+        payload: {
+          harnessModelOverrides: { 'opencode-server': 'cursor/composer-2.5' },
+        },
+      });
+      reloadModelProviderEnvMock.mockReset().mockResolvedValue('reloaded');
+
+      await runTask({
+        ...(createFollowUpRunTaskInput({ id: 153, taskId: 'task-153' }) as {
+          taskRun: object;
+        }),
+        taskRun: taskRun as never,
+      } as never);
+
+      const serverOptions = createServerMock.mock.calls.at(
+        -1,
+      )![0] as unknown as {
+        applyTaskModelSettingsUpdate: () => Promise<{ application: string }>;
+      };
+
+      return { requestReconnect, serverOptions };
+    }
+
+    it('refreshes the provider env from the persisted payload before restarting, so a Cursor model has its key', async () => {
+      const { requestReconnect, serverOptions } = await startTask();
+      const order: string[] = [];
+      reloadModelProviderEnvMock.mockImplementation(async () => {
+        order.push('reload');
+      });
+      requestReconnect.mockImplementation(async () => {
+        order.push('reconnect');
+      });
+
+      const result = await serverOptions.applyTaskModelSettingsUpdate();
+
+      expect(result).toEqual({ application: 'restarted' });
+      expect(order).toEqual(['reload', 'reconnect']);
+      // The reload is built over the object createHarness spawns from.
+      const harnessEnv = createHarnessMock.mock.calls.at(-1)![0].runtimeEnv;
+      expect(
+        vi.mocked(createModelProviderEnvReloader).mock.calls.at(-1)![0]
+          .runtimeEnv,
+      ).toBe(harnessEnv);
+    });
+
+    it('refreshes the provider env when the restart is deferred behind a running turn', async () => {
+      const { requestReconnect, serverOptions } = await startTask();
+      const manager = harnessManagerInstances.at(-1)!;
+      manager.currentPhase = 'running';
+
+      const result = await serverOptions.applyTaskModelSettingsUpdate();
+
+      // The restart itself happens later, at the next prompt; the env it
+      // spawns with has to be ready by then.
+      expect(result).toEqual({ application: 'deferred' });
+      expect(reloadModelProviderEnvMock).toHaveBeenCalledTimes(1);
+      expect(requestReconnect).not.toHaveBeenCalled();
+    });
+
+    it('defers the restart while a snapshot blocks the env refresh, then restarts at the next prompt once it can', async () => {
+      const { requestReconnect, serverOptions } = await startTask();
+      reloadModelProviderEnvMock.mockResolvedValueOnce('snapshot');
+      const prepare = createHarnessMock.mock.calls.at(-1)![0]
+        .prepareQueuedPromptActorScope as (
+        userId?: string,
+      ) => Promise<{ shouldReconnect: boolean; reason?: string }>;
+
+      const result = await serverOptions.applyTaskModelSettingsUpdate();
+
+      // Restarting now would fail with a key the deployment does have.
+      expect(result).toEqual({ application: 'deferred' });
+      expect(requestReconnect).not.toHaveBeenCalled();
+
+      reloadModelProviderEnvMock.mockResolvedValueOnce('snapshot');
+      await expect(prepare()).resolves.toEqual({ shouldReconnect: false });
+
+      await expect(prepare()).resolves.toEqual({
+        shouldReconnect: true,
+        reason: 'Applying updated task model settings before the next turn',
+      });
+      expect(reloadModelProviderEnvMock).toHaveBeenCalledTimes(3);
+    });
+
+    it('does not reload when the task is already shutting down', async () => {
+      const { serverOptions } = await startTask();
+      harnessManagerInstances.at(-1)!.currentPhase = 'shutting_down';
+
+      const result = await serverOptions.applyTaskModelSettingsUpdate();
+
+      expect(result).toEqual({ application: 'unavailable' });
+      expect(reloadModelProviderEnvMock).not.toHaveBeenCalled();
+    });
   });
 
   it('delivers the Roomote system prompt with worker release identity rather than task environment identity', async () => {
@@ -670,6 +795,102 @@ describe('runTask', () => {
       'session-105',
       {},
     );
+  });
+
+  it('names every session the harness announces as the chat parent thread', async () => {
+    await runTask({
+      taskRun: {
+        id: 106,
+        taskId: 'task-106',
+        payloadKind: TaskPayloadKind.StandardTask,
+        harness: 'opencode-server',
+        payload: {},
+        result: null,
+      } as never,
+      envVars: {},
+      workspacePath: '/tmp/workspace',
+      prompt: '',
+      harnessInstructions: undefined,
+      agentInstructions: undefined,
+      environmentConfig: undefined,
+      callbacks: {},
+      context: {},
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        log: vi.fn(),
+      } as never,
+      harnessSessionId: undefined,
+      workerEnv: {
+        authToken: 'cloud-token',
+        roomoteAppUrl: 'https://api.example.test',
+        trpcUrl: 'https://web.example.test',
+        buildUserFacingEnv: vi.fn(() => ({
+          HOME: '/tmp/home',
+          PATH: '/usr/bin',
+        })),
+      } as never,
+    });
+
+    const manager = harnessManagerInstances[0]!;
+
+    // The first session, then the one an engine switch or a failed session
+    // restore replaces it with: the closeout must follow the main session.
+    await manager.callbacks?.onStart?.('session-first');
+    await manager.callbacks?.onStart?.('session-replacement');
+
+    expect(
+      setChatParentThreadMock.mock.calls.map(([arg]) => arg.sessionId),
+    ).toEqual(['session-first', 'session-replacement']);
+  });
+
+  it('does not persist the placeholder id of a session that was never created', async () => {
+    await runTask({
+      taskRun: {
+        id: 107,
+        taskId: 'task-107',
+        payloadKind: TaskPayloadKind.StandardTask,
+        harness: 'opencode-server',
+        payload: {},
+        result: null,
+      } as never,
+      envVars: {},
+      workspacePath: '/tmp/workspace',
+      prompt: '',
+      harnessInstructions: undefined,
+      agentInstructions: undefined,
+      environmentConfig: undefined,
+      callbacks: {},
+      context: {},
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        log: vi.fn(),
+      } as never,
+      harnessSessionId: undefined,
+      workerEnv: {
+        authToken: 'cloud-token',
+        roomoteAppUrl: 'https://api.example.test',
+        trpcUrl: 'https://web.example.test',
+        buildUserFacingEnv: vi.fn(() => ({
+          HOME: '/tmp/home',
+          PATH: '/usr/bin',
+        })),
+      } as never,
+    });
+    taskRunsSetHarnessSessionIdMock.mockClear();
+    taskRunsUpdateMock.mockClear();
+    setChatParentThreadMock.mockClear();
+
+    await harnessManagerInstances[0]!.callbacks?.onStart?.(
+      'cursor-no-session-0b6f',
+    );
+
+    expect(taskRunsSetHarnessSessionIdMock).not.toHaveBeenCalled();
+    expect(taskRunsUpdateMock).not.toHaveBeenCalled();
+    expect(setChatParentThreadMock).not.toHaveBeenCalled();
   });
 
   it('always enables the terminal runtime env and sandbox server', async () => {

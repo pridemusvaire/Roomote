@@ -1,6 +1,7 @@
 import { TRPCError } from '@trpc/server';
 
 import { releaseCredentialWriteBarrier } from '../../lib/credential-write-barrier';
+import { refreshMaskSecretsFile } from '../../lib/task-secrets';
 import { refreshGitHubToken } from '../../run-task/polling/github-token-refresh';
 
 import { applyDeploymentEnvVarsReload } from './reloadDeploymentEnvVars';
@@ -13,7 +14,8 @@ import { publicProcedure } from '../trpc';
  * while the sandbox keeps running, the snapshot queue calls this so the
  * still-live task can keep working: release the barrier, re-materialize the
  * source-control token files, rewrite the sandbox env from the deployment's
- * current env vars. OpenCode OAuth credentials are not restored because task
+ * current env vars, and rewrite the secret values file the Roomote MCP server
+ * masks from. OpenCode OAuth credentials are not restored because task
  * sandboxes authenticate to model providers only through the gateway.
  */
 export const restoreScrubbedCredentials = publicProcedure.mutation(
@@ -31,6 +33,19 @@ export const restoreScrubbedCredentials = publicProcedure.mutation(
     releaseCredentialWriteBarrier();
 
     const failedSteps: string[] = [];
+
+    // The scrub removed the file the Roomote MCP server masks from, and a
+    // server that cannot read it refuses to send or store anything.
+    try {
+      await refreshMaskSecretsFile();
+    } catch (error) {
+      logger.warn(
+        `[restoreScrubbedCredentials] Failed to rewrite the secret values file: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      failedSteps.push('rewrite the secret values file');
+    }
 
     // Writes the token env files and refreshed token/credential files.
     const tokenRefresh = await refreshGitHubToken({ runId, logger });

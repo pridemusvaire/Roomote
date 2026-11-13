@@ -117,6 +117,7 @@ import { z } from 'zod';
 import packageJson from '../../../../../package.json';
 
 import { appendAttachmentTextsToPromptText } from '../../file-attachments';
+import { withoutCursorRoleModels } from '../cursor-model-guard';
 import {
   ensureOwnTaskFollowThroughWakeup,
   ensureSessionGoalContinuationWakeup,
@@ -3771,7 +3772,11 @@ export async function answerFastAgentQuestion({
       reasoningEffort = session.reasoningEffort;
     let modelRuntimeEnv: Record<string, string> = {};
     try {
-      modelRuntimeEnv = await resolveEffectiveModelRuntimeEnv();
+      // The fast agent runs on OpenCode, which cannot run Cursor models, so a
+      // Cursor orchestration model or fallback behaves as if it were unset.
+      modelRuntimeEnv = withoutCursorRoleModels(
+        await resolveEffectiveModelRuntimeEnv(),
+      );
     } catch {
       // A missing or unavailable fallback config preserves existing behavior.
     }

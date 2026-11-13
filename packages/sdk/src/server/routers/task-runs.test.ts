@@ -59,6 +59,7 @@ const {
   mockClaimMissingChatCloseoutFallbackDelivery,
   mockReleaseMissingChatCloseoutFallbackDelivery,
   mockUpdateTaskRun,
+  mockGetRunTranscriptTail,
 } = vi.hoisted(() => ({
   mockEnqueueTask: vi.fn(),
   mockFindTaskRun: vi.fn(),
@@ -81,6 +82,7 @@ const {
   mockClaimMissingChatCloseoutFallbackDelivery: vi.fn(),
   mockReleaseMissingChatCloseoutFallbackDelivery: vi.fn(),
   mockUpdateTaskRun: vi.fn(),
+  mockGetRunTranscriptTail: vi.fn(),
 }));
 
 vi.mock('@roomote/cloud-agents/server', () => ({
@@ -150,6 +152,7 @@ vi.mock('../lib/task-runs', () => ({
   finishRun: vi.fn(),
   getMessageSources: vi.fn(),
   getResolvedGitAuthor: vi.fn(),
+  getRunTranscriptTail: mockGetRunTranscriptTail,
   getResolvedRuntimeEnvVars: vi.fn(),
   recordComputeProviderUsage: vi.fn(),
   recordTaskInferenceUsage: mockRecordTaskInferenceUsage,
@@ -240,6 +243,24 @@ describe('taskRunsRouter queue message guards', () => {
     mockClaimShowWidgetFallbackDelivery.mockResolvedValue({ claimed: true });
     mockReleaseShowWidgetFallbackDelivery.mockResolvedValue(undefined);
     mockUpdateTaskRun.mockResolvedValue(undefined);
+  });
+
+  it('reads the transcript tail for a run token of that run only', async () => {
+    mockGetRunTranscriptTail.mockResolvedValue([{ role: 'user', text: 'hi' }]);
+
+    await expect(
+      createRunCaller().getTranscriptTail({ runId: 42 }),
+    ).resolves.toEqual([{ role: 'user', text: 'hi' }]);
+    expect(mockGetRunTranscriptTail).toHaveBeenCalledWith({ runId: 42 });
+
+    mockGetRunTranscriptTail.mockClear();
+    await expect(
+      createAuthCaller().getTranscriptTail({ runId: 42 }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      createRunCaller().getTranscriptTail({ runId: 43 }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mockGetRunTranscriptTail).not.toHaveBeenCalled();
   });
 
   it.each(['typesafe', 'openrouter', 'vercel'])(

@@ -879,6 +879,35 @@ describe('buildOpenCodeCliEnv', () => {
     });
   });
 
+  it('never hands a Cursor model to OpenCode for any helper runtime role', () => {
+    const extraEnv = Object.fromEntries(
+      (['coding', 'helper', 'vision', 'audioVideo'] as const).map((role) => [
+        TASK_MODEL_ROLE_DESCRIPTORS[role].modelEnvVar,
+        'cursor/composer-2.5',
+      ]),
+    );
+    const env = buildOpenCodeCliEnv({
+      ...extraEnv,
+      CURSOR_API_KEY: 'cursor-key',
+    });
+
+    for (const key of Object.keys(extraEnv))
+      expect(env).not.toHaveProperty(key);
+    expect(env.OPENCODE_CONFIG_CONTENT).not.toContain('cursor/');
+    // Only the model is withheld; the credential still reaches the worker path.
+    expect(env.CURSOR_API_KEY).toBe('cursor-key');
+  });
+
+  it('keeps a non-Cursor role model when only the coding role is a Cursor model', () => {
+    const env = buildOpenCodeCliEnv({
+      R_MODEL: 'cursor/composer-2.5',
+      R_SMALL_MODEL: 'openrouter/openai/gpt-5.4',
+    });
+
+    expect(env.R_MODEL).toBeUndefined();
+    expect(env.R_SMALL_MODEL).toBe('openrouter/openai/gpt-5.4');
+  });
+
   it('denies tools without any model config', () => {
     const env = buildOpenCodeCliEnv();
 

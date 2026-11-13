@@ -3,7 +3,6 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
 
 import {
   asBoolean,
@@ -64,6 +63,13 @@ import type {
   StartNewTaskCommand,
   TaskCommand,
 } from '../../harness';
+import { withDeveloperInstructions } from '../prompt-instructions';
+import {
+  evaluateSlackStopHook,
+  FALLBACK_STOP_HOOK_REMINDER,
+  MAX_STOP_HOOK_REMINDERS,
+  type StopHookDecision,
+} from '../slack-stop-hook';
 import {
   hasTerminalChatReplyDeliveryFailure,
   MAX_RETRYABLE_DELIVERY_FAILURES_BEFORE_TERMINAL,
@@ -144,6 +150,13 @@ interface OpenCodeServerHarnessOptions {
   };
   commandEnv?: Record<string, string>;
   initialSessionId?: string;
+  /**
+   * The conversation so far, for a fresh session that continues a task begun
+   * on another engine. It rides in the session's first prompt, so OpenCode
+   * keeps it in the session's own history across later respawns. Ignored when
+   * a session is resumed: that session already has its history.
+   */
+  handoffContext?: string;
   model?: string;
   preserveSavedSessionModel?: boolean;
   activeModelId?: string;
@@ -207,40 +220,6 @@ interface OpenCodeServerHarnessOptions {
   }>;
 }
 
-const SLACK_STOP_HOOK_PROCESS_ENV_KEYS = [
-  'PATH',
-  'HOME',
-  'USER',
-  'LOGNAME',
-  'SHELL',
-  'TMPDIR',
-  'TEMP',
-  'TMP',
-  'NODE_OPTIONS',
-  'NODE_PATH',
-  'SSL_CERT_FILE',
-  'SSL_CERT_DIR',
-] as const;
-
-export function buildOpenCodeSlackStopHookEnv(
-  commandEnv: Record<string, string> | undefined,
-): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {};
-
-  for (const key of SLACK_STOP_HOOK_PROCESS_ENV_KEYS) {
-    const value = process.env[key];
-
-    if (value !== undefined) {
-      env[key] = value;
-    }
-  }
-
-  return {
-    ...env,
-    ...(commandEnv ?? {}),
-  };
-}
-
 interface PromptInput {
   text?: string;
   images?: string[];
@@ -257,11 +236,6 @@ interface FinalizedAssistantTurn {
   messageId: string;
   text: string;
   tokenUsage: Record<string, unknown>;
-}
-
-interface OpenCodeSlackStopHookDecision {
-  blocked: boolean;
-  reason?: string;
 }
 
 type AcpToolStatus = 'in_progress' | 'completed' | 'failed';
@@ -341,7 +315,6 @@ interface OpenCodeChildSessionRelationship {
 const OPEN_CODE_EXECUTE_TOOLS = new Set(['bash', 'shell']);
 const OPEN_CODE_READ_TOOLS = new Set(['read']);
 const OPEN_CODE_SEARCH_TOOLS = new Set(['grep', 'glob', 'find', 'list', 'ls']);
-const MAX_OPENCODE_STOP_HOOK_REMINDERS = 3;
 const MAX_OPENCODE_INTERNAL_RETRY_ATTEMPTS = 3;
 // Fail-safe for a wedged stop-hook reminder cycle. After a turn finishes
 // without the required Slack closeout, we resubmit a reminder prompt and then
@@ -369,8 +342,6 @@ const MAX_INCOMPLETE_SUBAGENT_SETTLEMENT_RECHECKS = 1;
 const DEFAULT_VISUAL_PROOF_TIMEOUT_MS = 5 * 60_000;
 const DEFAULT_QUEUED_PROMPT_RETRY_DELAY_MS = 1_000;
 const MAX_PROGRESS_COMMAND_CHARS = 240;
-const FALLBACK_OPENCODE_STOP_HOOK_REMINDER =
-  'Before finalizing, post a terminal chat-visible reply for the current turn.';
 const ROOMOTE_OPENCODE_VISUAL_AGENT_NAME = 'visual';
 const CAPTURE_VISUAL_PROOF_SKILL = 'capture-visual-proof';
 const VISUAL_PROOF_TIMEOUT_RECOVERY_PROMPT =
@@ -1730,6 +1701,8 @@ export class OpenCodeServerHarness
   private pendingToolApprovals = 0;
   /** What the user last asked for; Auto mode checks a gated call against it. */
   private latestUserRequest: string | undefined;
+  /** Held until a prompt is accepted, so a rejected first prompt retries it. */
+  private pendingHandoffContext: string | undefined;
   // Request ids that have already been answered or abandoned. A late answer
   // (e.g. a web POST opened before a steer abandoned the question) for one
   // of these must be rejected rather than fabricated into the replayed turn.
@@ -1844,6 +1817,9 @@ export class OpenCodeServerHarness
     // first use rather than trusting it blindly.
     this.resumedSessionPendingValidation =
       options.initialSessionId !== undefined;
+    this.pendingHandoffContext = options.initialSessionId
+      ? undefined
+      : options.handoffContext;
     this.model = options.model
       ? resolveOpenCodeModelSelection(options.model)
       : undefined;
@@ -2134,9 +2110,7 @@ export class OpenCodeServerHarness
     );
   }
 
-  private evaluateSlackStopHook(
-    sessionId: string,
-  ): OpenCodeSlackStopHookDecision {
+  private evaluateSlackStopHook(sessionId: string): StopHookDecision {
     const stateFilePath =
       this.commandEnv?.ROOMOTE_SLACK_REPLY_SATISFACTION_STATE_FILE;
     const stopHookScriptPath =
@@ -2146,73 +2120,13 @@ export class OpenCodeServerHarness
       return { blocked: false };
     }
 
-    const result = spawnSync(process.execPath, [stopHookScriptPath], {
-      encoding: 'utf8',
-      input: JSON.stringify({ threadId: sessionId }),
-      env: buildOpenCodeSlackStopHookEnv(this.commandEnv),
+    return evaluateSlackStopHook({
+      sessionId,
+      commandEnv: this.commandEnv,
+      script: { path: stopHookScriptPath },
+      logger: this.logger,
+      label: 'OpenCode',
     });
-
-    if (result.error) {
-      this.logger.error(
-        `OpenCode Slack stop hook failed error=${result.error.message}`,
-      );
-      return {
-        blocked: true,
-        reason: FALLBACK_OPENCODE_STOP_HOOK_REMINDER,
-      };
-    }
-
-    if (result.status !== 0) {
-      this.logger.error(
-        `OpenCode Slack stop hook exited status=${result.status} stderr=${result.stderr}`,
-      );
-      return {
-        blocked: true,
-        reason: FALLBACK_OPENCODE_STOP_HOOK_REMINDER,
-      };
-    }
-
-    const stdout = result.stdout.trim();
-
-    if (stdout.length === 0) {
-      return { blocked: false };
-    }
-
-    let payload: Record<string, unknown> | undefined;
-
-    try {
-      payload = asRecord(JSON.parse(stdout));
-    } catch {
-      this.logger.error(
-        `OpenCode Slack stop hook returned invalid JSON stdout=${stdout}`,
-      );
-      return {
-        blocked: true,
-        reason: FALLBACK_OPENCODE_STOP_HOOK_REMINDER,
-      };
-    }
-
-    if (!payload) {
-      return { blocked: false };
-    }
-
-    const blocked =
-      payload?.decision === 'block' ||
-      payload?.continue === false ||
-      typeof payload?.stopReason === 'string';
-
-    if (!blocked) {
-      return { blocked: false };
-    }
-
-    return {
-      blocked: true,
-      reason:
-        asString(payload.reason) ??
-        asString(payload.stopReason) ??
-        asString(asRecord(payload.hookSpecificOutput)?.additionalContext) ??
-        FALLBACK_OPENCODE_STOP_HOOK_REMINDER,
-    };
   }
 
   private waitForEventStreamReady(): Promise<void> {
@@ -2314,6 +2228,7 @@ export class OpenCodeServerHarness
         // closely-following prompt can't race resume into creating a duplicate
         // session.
         this.sessionId = command.data;
+        this.pendingHandoffContext = undefined;
         this.resumedSessionPendingValidation = true;
         this.latestSessionMessageId = undefined;
         this.runtimeEvents.taskStarted(command.data);
@@ -2512,7 +2427,16 @@ export class OpenCodeServerHarness
       return;
     }
 
+    const previousSessionId = this.sessionId;
     const sessionId = await this.ensureSession(text);
+
+    if (sessionId !== previousSessionId) {
+      // A fresh session (the task switched here from another engine, or its
+      // old session was lost): announce it so the manager follows the new id
+      // instead of dropping everything emitted under it.
+      this.runtimeEvents.taskStarted(sessionId);
+    }
+
     this.runtimeEvents.userPrompt({
       sessionId,
       ...command.data,
@@ -4046,7 +3970,11 @@ export class OpenCodeServerHarness
     const visiblePromptText = addVisualDelegationReminder
       ? withVisualDelegationReminder(prompt.text, visualImagePaths)
       : prompt.text;
-    const promptText = visiblePromptText;
+    const handoffContext = this.pendingHandoffContext;
+    // An image-only prompt has no text; it is left as it is without a handoff.
+    const promptText = handoffContext
+      ? withDeveloperInstructions(visiblePromptText ?? '', handoffContext)
+      : visiblePromptText;
 
     this.inFlight = true;
     this.finalizedAssistantTurn = null;
@@ -4089,6 +4017,10 @@ export class OpenCodeServerHarness
       await this.cleanupVisualAttachmentDirectories();
       this.inFlight = false;
       throw error;
+    }
+
+    if (handoffContext !== undefined) {
+      this.pendingHandoffContext = undefined;
     }
 
     this.stallWatchdogs.armTurnStall();
@@ -5916,18 +5848,17 @@ export class OpenCodeServerHarness
           : null;
 
       if (stopDecision.blocked) {
-        const reason =
-          stopDecision.reason ?? FALLBACK_OPENCODE_STOP_HOOK_REMINDER;
+        const reason = stopDecision.reason ?? FALLBACK_STOP_HOOK_REMINDER;
 
         if (finalized?.text.trim()) {
           this.lastBlockedCloseoutAssistantText = finalized.text;
         }
 
-        if (this.stopHookReminderCount >= MAX_OPENCODE_STOP_HOOK_REMINDERS) {
+        if (this.stopHookReminderCount >= MAX_STOP_HOOK_REMINDERS) {
           // Give up gracefully: complete the turn without a Slack closeout
           // instead of aborting the task.
           this.logger.warn(
-            `OpenCode Slack closeout hook still blocked after ${MAX_OPENCODE_STOP_HOOK_REMINDERS} reminders; completing the turn without a Slack closeout reason=${reason}`,
+            `OpenCode Slack closeout hook still blocked after ${MAX_STOP_HOOK_REMINDERS} reminders; completing the turn without a Slack closeout reason=${reason}`,
           );
           missingChatCloseoutReminderCount = this.stopHookReminderCount;
         } else {

@@ -1605,6 +1605,11 @@ export async function saveSetupNewModelConfigCommand(
   if (provider.id === ROOMOTE_INFERENCE_PROVIDER_ID) {
     throw new Error('Roomote inference is managed by your hosting provider.');
   }
+  if (provider.requiresOtherProvider) {
+    throw new Error(
+      `${provider.label} cannot be the only provider. Pick another provider now and add ${provider.label} in Settings afterwards.`,
+    );
+  }
   const isOauthProvider = provider.authKind === 'oauth';
 
   const [chatgptConnected, githubCopilotConnected, xaiSubscriptionConnected] =

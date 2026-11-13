@@ -2,6 +2,7 @@ import { rmSync } from 'fs';
 import { homedir } from 'os';
 
 import { engageCredentialWriteBarrier } from '../../lib/credential-write-barrier';
+import { MASK_SECRETS_FILE_PATH } from '../../lib/mask-secrets-file';
 import {
   ensureSourceControlTokenEnvFiles,
   removeSourceControlCredentialFiles,
@@ -56,6 +57,8 @@ function runScrubStep(
  *   including inference provider keys and pasted Google service-account JSON.
  * - `~/.roomote/gh-token` and the source-control credentials TSV hold git
  *   provider tokens.
+ * - `~/.roomote/mask-secrets.json` lists the values of the task's secret
+ *   variables for the Roomote MCP server to mask.
  * - Old snapshots can contain OpenCode `auth.json`; the data dir can also
  *   contain disabled Google service-account JSON.
  */
@@ -88,6 +91,10 @@ export async function scrubSandboxSecretsBeforeSnapshot(
 
   trackScrubStep('remove source-control credential files', () =>
     removeSourceControlCredentialFiles(),
+  );
+
+  trackScrubStep('remove the secret values file', () =>
+    rmSync(MASK_SECRETS_FILE_PATH, { force: true }),
   );
 
   trackScrubStep('remove OpenCode credential files', () => {

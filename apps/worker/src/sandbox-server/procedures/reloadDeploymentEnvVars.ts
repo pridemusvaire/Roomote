@@ -6,6 +6,7 @@ import { resolveTaskWorkspace } from '@roomote/types';
 import { injectEnvVars } from '../../commands/utils/env-vars';
 import type { WorkerEnv } from '../../env';
 import { runUnlessCredentialWriteBarrier } from '../../lib';
+import { publishTaskSecrets } from '../../lib/task-secrets';
 
 import type { Harness } from '../lib/harness';
 import { publicProcedure } from '../trpc';
@@ -58,6 +59,13 @@ export async function applyDeploymentEnvVarsReload(input: {
   };
   const isEnvironmentWorkspace =
     resolveTaskWorkspace(taskRun.payload).type === 'environment';
+
+  // A variable added mid-task (`request_environment_variables`) is a secret
+  // the agent can see as soon as it is in the shell env, so it is masked first:
+  // the live harness masks it from here on, and the file the Roomote MCP server
+  // masks from is rewritten (unless a snapshot holds the barrier, in which case
+  // the restore rewrites it).
+  await publishTaskSecrets(nextRuntimeEnv);
 
   await injectEnvVars(nextRuntimeEnv, taskRun, {
     previewProxyBaseUrl: workerEnv.previewProxyBaseUrl,

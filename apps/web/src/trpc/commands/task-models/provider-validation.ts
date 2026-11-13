@@ -2,10 +2,13 @@ import type { NonTaskInferenceValidationFailureReason } from '@roomote/cloud-age
 import { validateNonTaskInference } from '@roomote/cloud-agents/server';
 import { resolveEffectiveDeploymentEnvVars } from '@roomote/db/server';
 import {
+  CURSOR_PROVIDER_ID,
   collectSetupModelProviderCredentialValues,
   getSetupModelProviderEnvVarNames,
   isConfiguredEnvValue,
 } from '@roomote/types';
+
+import { checkCursorApiKey } from './cursor-key-check';
 
 export class InferenceProviderValidationError extends Error {
   constructor(
@@ -31,10 +34,9 @@ const BLOCKING_FAILURE_REASONS =
 
 /** A validation result that does not block the save but is worth showing. */
 type InferenceProviderValidationWarning = {
-  code: Extract<
-    NonTaskInferenceValidationFailureReason,
-    'insufficient_credits'
-  >;
+  code:
+    | Extract<NonTaskInferenceValidationFailureReason, 'insufficient_credits'>
+    | 'validation_unavailable';
   message: string;
 };
 
@@ -147,6 +149,37 @@ export async function assertInferenceProviderConnection(params: {
 }
 
 /**
+ * Cursor does not go through the OpenCode canary: its models run in
+ * `cursor-agent`, not OpenCode. Its key is checked against Cursor's own API
+ * instead. Only a rejected key blocks the save; Cursor being unreachable
+ * saves it with a warning, like any other provider's transient failure.
+ */
+async function assertCursorApiKey(
+  credentialValues: Array<{ name: string; value: string }>,
+): Promise<InferenceProviderValidationWarning | null> {
+  const apiKey = credentialValues.find(
+    ({ name }) => name === 'CURSOR_API_KEY',
+  )?.value;
+  const check = apiKey ? await checkCursorApiKey(apiKey) : 'valid';
+
+  if (check === 'rejected') {
+    throw new InferenceProviderValidationError(
+      'invalid_credentials',
+      'Cursor: Cursor rejected this API key. Check that it is a valid, active key.',
+      false,
+    );
+  }
+
+  return check === 'unreachable'
+    ? {
+        code: 'validation_unavailable',
+        message:
+          'The Cursor API key could not be verified because Cursor could not be reached. It was saved as entered.',
+      }
+    : null;
+}
+
+/**
  * Pre-save credential validation shared by the setup wizard and the Models
  * settings page: collect the candidate credentials once, skip the live check
  * when the save changes nothing, and qualify the rest through the non-task
@@ -171,6 +204,10 @@ export async function validateSetupModelProviderCredentials(
   // removes a persisted value, needs qualification.
   if (changedValues.length === 0 && clearedPersistedEnvVarNames.length === 0) {
     return null;
+  }
+
+  if (params.provider.id === CURSOR_PROVIDER_ID) {
+    return assertCursorApiKey(values);
   }
 
   return assertInferenceProviderConnection({

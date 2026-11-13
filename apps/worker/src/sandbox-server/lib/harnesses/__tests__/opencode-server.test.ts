@@ -29,10 +29,8 @@ import { recordChatReplySatisfaction } from '../../../../mcp/roomote-mcp-server/
 import { TaskCommandName } from '../../harness';
 import type { HarnessInferenceUsageEvent } from '../../harness';
 import type { OpenCodeServerClient } from '../opencode-server/client';
-import {
-  buildOpenCodeSlackStopHookEnv,
-  OpenCodeServerHarness,
-} from '../opencode-server/harness';
+import { OpenCodeServerHarness } from '../opencode-server/harness';
+import { buildSlackStopHookEnv } from '../slack-stop-hook-env';
 import type {
   OpenCodeGlobalEvent,
   OpenCodeMessageInfo,
@@ -143,6 +141,7 @@ function createHarness(
     >;
     model?: string;
     initialSessionId?: string;
+    handoffContext?: string;
     preserveSavedSessionModel?: boolean;
   } = {},
 ) {
@@ -152,6 +151,7 @@ function createHarness(
     logger: createLogger(),
     commandEnv: options.commandEnv,
     initialSessionId: options.initialSessionId,
+    handoffContext: options.handoffContext,
     model: options.model ?? TEST_OPENCODE_MODEL,
     preserveSavedSessionModel: options.preserveSavedSessionModel,
     eventStreamReadyTimeoutMs: 100,
@@ -173,7 +173,7 @@ function createHarness(
   return { client, harness };
 }
 
-describe('buildOpenCodeSlackStopHookEnv', () => {
+describe('buildSlackStopHookEnv', () => {
   const originalEnv = { ...process.env };
 
   afterEach(() => {
@@ -186,7 +186,7 @@ describe('buildOpenCodeSlackStopHookEnv', () => {
     process.env.ROOMOTE_SECRET_LAUNCHER_TOKEN = 'do-not-leak';
     process.env.DATABASE_URL = 'postgres://do-not-leak';
 
-    const env = buildOpenCodeSlackStopHookEnv({
+    const env = buildSlackStopHookEnv({
       PATH: '/sandbox/bin',
       ROOMOTE_SLACK_REPLY_SATISFACTION_STATE_FILE: '/tmp/state.json',
       ROOMOTE_OPENCODE_SLACK_STOP_HOOK_SCRIPT: '/tmp/stop-hook.cjs',
@@ -894,6 +894,86 @@ describe('OpenCodeServerHarness', () => {
     } finally {
       harness.dispose();
     }
+  });
+
+  describe('engine handoff context', () => {
+    const send = (harness: OpenCodeServerHarness, text: string) =>
+      harness.sendCommand({
+        commandName: TaskCommandName.StartNewTask,
+        data: { text, visibleInTranscript: true, source: 'web' },
+      });
+    const sentText = (client: FakeOpenCodeServerClient, call: number) =>
+      (
+        client.promptAsync.mock.calls[call]?.[0] as {
+          request: { parts: { text: string }[] };
+        }
+      ).request.parts[0]!.text;
+
+    it('carries the handoff in the first prompt of the fresh session only', async () => {
+      const { client, harness } = createHarness(undefined, {
+        handoffContext: '# Task handoff\nCursor did the migration',
+      });
+
+      try {
+        await connectHarness(harness, client);
+        send(harness, 'continue please');
+        await vi.waitFor(() =>
+          expect(client.promptAsync).toHaveBeenCalledTimes(1),
+        );
+        send(harness, 'and then?');
+        await vi.waitFor(() =>
+          expect(client.promptAsync).toHaveBeenCalledTimes(2),
+        );
+
+        expect(sentText(client, 0)).toContain('Cursor did the migration');
+        expect(sentText(client, 0)).toContain('continue please');
+        expect(sentText(client, 1)).toBe('and then?');
+      } finally {
+        harness.dispose();
+      }
+    });
+
+    it('keeps the handoff for the retry when the first prompt is not accepted', async () => {
+      const { client, harness } = createHarness(undefined, {
+        handoffContext: '# Task handoff',
+      });
+      client.promptAsync.mockRejectedValueOnce(new Error('busy'));
+
+      try {
+        await connectHarness(harness, client);
+        send(harness, 'first try');
+        await vi.waitFor(() =>
+          expect(client.promptAsync).toHaveBeenCalledTimes(1),
+        );
+        send(harness, 'second try');
+        await vi.waitFor(() =>
+          expect(client.promptAsync).toHaveBeenCalledTimes(2),
+        );
+
+        expect(sentText(client, 1)).toContain('# Task handoff');
+      } finally {
+        harness.dispose();
+      }
+    });
+
+    it('does not add the handoff to a resumed session', async () => {
+      const { client, harness } = createHarness(undefined, {
+        initialSessionId: 'ses_1',
+        handoffContext: '# Task handoff',
+      });
+
+      try {
+        await connectHarness(harness, client);
+        send(harness, 'hello');
+        await vi.waitFor(() =>
+          expect(client.promptAsync).toHaveBeenCalledTimes(1),
+        );
+
+        expect(sentText(client, 0)).toBe('hello');
+      } finally {
+        harness.dispose();
+      }
+    });
   });
 
   it('materializes image prompts and adds a visual delegation reminder when the visual subagent is configured', async () => {
@@ -7134,6 +7214,29 @@ describe('OpenCodeServerHarness', () => {
       expect(client.promptAsync.mock.calls[0]?.[0]).toMatchObject({
         sessionId: 'ses_1',
       });
+    } finally {
+      harness.dispose();
+    }
+  });
+
+  it('announces a fresh session created by a follow-up so the manager follows it', async () => {
+    const { client, harness } = createHarness();
+    const taskStarted: unknown[] = [];
+    harness.subscribe((event) => {
+      if (event.eventName === 'taskStarted') taskStarted.push(event.payload[0]);
+    });
+
+    try {
+      await connectHarness(harness, client);
+
+      // A task that switched engines arrives with no OpenCode session yet.
+      harness.sendCommand({
+        commandName: TaskCommandName.SendMessage,
+        data: { text: 'Continue.', visibleInTranscript: true },
+      });
+      await vi.waitFor(() => expect(client.promptAsync).toHaveBeenCalled());
+
+      expect(taskStarted).toEqual(['ses_1']);
     } finally {
       harness.dispose();
     }

@@ -30,6 +30,7 @@ import {
   type AgentSafetyReason,
   getOpenAiCompatibleRuntimeConfigs,
   getTaskModelDisplayName,
+  isCursorTaskModelId,
   isInferenceCreditsExhaustedError,
   isOpenRouterInFlightBudgetError,
   isReasoningEffort,
@@ -45,6 +46,11 @@ import {
 import { captureInstanceEvent } from '@roomote/telemetry/server';
 import { z } from 'zod';
 
+import {
+  hasCursorRoleModel,
+  ignoreCursorModel,
+  withoutCursorRoleModels,
+} from './cursor-model-guard';
 import { decodeInferenceErrorEnvelope } from './inference-error-envelope';
 import { streamOpenCodeEventsAcrossDisposal } from './opencode-event-stream';
 import {
@@ -867,8 +873,10 @@ function parseOpenCodeConfigJson(value: string): Record<string, unknown> {
 }
 
 export function resolveOpenCodeSmallModel(): string | undefined {
-  const configuredSmallModel = process.env.R_SMALL_MODEL?.trim();
-  const configuredModel = process.env.R_MODEL?.trim();
+  const configuredSmallModel = ignoreCursorModel(
+    process.env.R_SMALL_MODEL?.trim(),
+  );
+  const configuredModel = ignoreCursorModel(process.env.R_MODEL?.trim());
 
   if (configuredSmallModel || configuredModel) {
     return configuredSmallModel || configuredModel;
@@ -1033,8 +1041,11 @@ async function resolveNonTaskModelRuntime(
   resolvedModelRuntimeEnv: NonTaskModelRuntimeEnv;
   reasoningEffort?: ReasoningEffort;
 }> {
-  const requestedModel = model?.trim();
+  // OpenCode cannot run Cursor models, so a Cursor request (or role model)
+  // behaves as if it were unset and the role falls back to its own chain.
+  const requestedModel = ignoreCursorModel(model?.trim());
   let resolvedModelRuntimeEnv: NonTaskModelRuntimeEnv = {};
+  let droppedCursorModel = model ? isCursorTaskModelId(model) : false;
 
   try {
     // Provider credentials resolve from the role models, so an explicit
@@ -1066,6 +1077,9 @@ async function resolveNonTaskModelRuntime(
     );
   }
 
+  droppedCursorModel ||= hasCursorRoleModel(resolvedModelRuntimeEnv);
+  resolvedModelRuntimeEnv = withoutCursorRoleModels(resolvedModelRuntimeEnv);
+
   const resolvedModel =
     requestedModel ||
     (modelRole === 'orchestration'
@@ -1086,7 +1100,9 @@ async function resolveNonTaskModelRuntime(
 
   if (!resolvedModel) {
     throw new Error(
-      'Model configuration is required for non-task model calls. Set R_MODEL to a provider/model ID.',
+      droppedCursorModel
+        ? 'Cursor models only run as a task coding model. Set a non-Cursor helper model (R_SMALL_MODEL) for non-task model calls.'
+        : 'Model configuration is required for non-task model calls. Set R_MODEL to a provider/model ID.',
     );
   }
 
@@ -1130,7 +1146,11 @@ async function resolveNonTaskModelRuntime(
     audioVideoModel:
       resolvedModelRuntimeEnv.R_AUDIO_VIDEO_MODEL ??
       resolvedModelRuntimeEnv.R_MODEL ??
-      asString(parseOpenCodeConfigJson(readOpenCodeDebugConfig()).model),
+      // A withheld Cursor coding model must not trigger an OpenCode CLI
+      // lookup for a default the deployment never configured.
+      (droppedCursorModel
+        ? undefined
+        : asString(parseOpenCodeConfigJson(readOpenCodeDebugConfig()).model)),
     // An explicit model rides into the server lease env as the primary role
     // model so the config builder registers its provider — the deployment's
     // role models may not include it, and an unregistered Bedrock (or

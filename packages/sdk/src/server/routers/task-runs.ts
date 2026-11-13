@@ -94,6 +94,7 @@ import {
 import {
   findTaskRun,
   findTaskRunRuntimeState,
+  getRunTranscriptTail,
   clearCommunicationAckReaction,
   updateTaskRun,
   updateTaskRunRuntimeState,
@@ -642,6 +643,12 @@ export const taskRunsRouter = router({
         ...(input.output ? { output: input.output } : {}),
       }),
     ),
+  // Run-token only, and the task is derived from the run: a user token, or a
+  // caller-supplied task id, must not reach another task's transcript.
+  getTranscriptTail: runTokenOnlyScoped(
+    z.object({ runId: z.number() }),
+    'runId',
+  ).query(({ input }) => getRunTranscriptTail({ runId: input.runId })),
   getResolvedGitAuthor: runScoped(
     z.object({ runId: z.number() }),
     'runId',

@@ -1242,6 +1242,77 @@ describe('resolveEffectiveModelRuntimeEnv', () => {
   });
 });
 
+describe('provider credentials for the models a task selected itself', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDecryptSecrets.mockImplementation(async (value) => value);
+    mockEnvironmentVariablesFindMany.mockResolvedValue([]);
+    mockResolveGitHubCopilotOpenCodeAuthContent.mockResolvedValue(null);
+    mockResolveOpenCodeAuthContent.mockResolvedValue(null);
+    mockIsChatGptSubscriptionFastModeEnabled.mockResolvedValue(false);
+    mockGetFreshXaiAccessToken.mockResolvedValue(null);
+    mockDeploymentSettingsFindFirst.mockResolvedValue({
+      runtimeModelConfig: { roomoteModel: 'anthropic/claude-sonnet-4' },
+    });
+  });
+
+  const deploymentEnvVars = {
+    ANTHROPIC_API_KEY: 'sk-anthropic',
+    OPENAI_API_KEY: 'sk-openai',
+    CURSOR_API_KEY: 'sk-cursor',
+  };
+
+  it('delivers no key for a provider no model of the task uses', async () => {
+    const env = await resolveSandboxModelRuntimeEnv({
+      runtimeEnv: {},
+      deploymentEnvVars,
+    });
+
+    expect(env).not.toHaveProperty('CURSOR_API_KEY');
+    expect(env).not.toHaveProperty('OPENAI_API_KEY');
+    expect(env.R_MODEL_ENV_KEYS).toBe('ANTHROPIC_API_KEY');
+  });
+
+  it('delivers the Cursor key to a task that selected a Cursor model', async () => {
+    const env = await resolveSandboxModelRuntimeEnv({
+      runtimeEnv: {},
+      deploymentEnvVars,
+      taskModelIds: ['cursor/composer-2.5'],
+    });
+
+    expect(env.CURSOR_API_KEY).toBe('sk-cursor');
+    expect(env.R_MODEL_ENV_KEYS).toContain('CURSOR_API_KEY');
+    expect(env).not.toHaveProperty('OPENAI_API_KEY');
+  });
+
+  it('serves a gateway-covered provider of the task through the gateway, not the Cursor key', async () => {
+    const env = await resolveSandboxModelRuntimeEnv({
+      runtimeEnv: {},
+      deploymentEnvVars,
+      taskModelIds: ['openai/gpt-5'],
+    });
+
+    expect(env.R_INFERENCE_GATEWAY_KEYS?.split(',').sort()).toEqual([
+      'ANTHROPIC_API_KEY',
+      'OPENAI_API_KEY',
+    ]);
+    expect(env).not.toHaveProperty('OPENAI_API_KEY');
+    expect(env).not.toHaveProperty('CURSOR_API_KEY');
+  });
+
+  it('adds the key of the task model to an explicit R_MODEL_ENV_KEYS list', async () => {
+    const env = await resolveSandboxModelRuntimeEnv({
+      runtimeEnv: { R_MODEL_ENV_KEYS: 'CUSTOM_PROVIDER_KEY' },
+      deploymentEnvVars: { ...deploymentEnvVars, CUSTOM_PROVIDER_KEY: 'sk-x' },
+      taskModelIds: ['cursor/composer-2.5'],
+    });
+
+    expect(env.R_MODEL_ENV_KEYS).toBe('CUSTOM_PROVIDER_KEY,CURSOR_API_KEY');
+    expect(env.CURSOR_API_KEY).toBe('sk-cursor');
+    expect(env.CUSTOM_PROVIDER_KEY).toBe('sk-x');
+  });
+});
+
 describe('managed Roomote inference key', () => {
   beforeEach(() => {
     vi.clearAllMocks();

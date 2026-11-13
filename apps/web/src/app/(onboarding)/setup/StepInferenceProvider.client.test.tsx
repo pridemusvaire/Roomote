@@ -861,3 +861,37 @@ describe('StepInferenceProvider managed Roomote inference', () => {
     ).not.toBeInTheDocument();
   });
 });
+
+describe('StepInferenceProvider providers that need another provider', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseQueryClient.mockReturnValue({
+      invalidateQueries: vi.fn(),
+    } as unknown as ReturnType<typeof mockUseQueryClient>);
+    setupMutationMock();
+    setupQueryMocks({ chatgptConnected: false });
+  });
+
+  it('does not offer Cursor in the setup wizard', () => {
+    render(
+      <StepInferenceProvider
+        modelSetup={buildModelSetup({
+          providers: [
+            {
+              ...openrouterProviderStatus(),
+              id: 'cursor',
+              label: 'Cursor',
+              requiresOtherProvider: true,
+            },
+            chatgptProviderStatus(false),
+          ],
+        })}
+        onContinue={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.queryByRole('button', { name: /cursor/i }),
+    ).not.toBeInTheDocument();
+  });
+});

@@ -80,6 +80,7 @@ export const RECOMMENDED_TASK_MODELS = [
   { id: 'qwen3-8-max', displayName: 'Qwen3.8 Max', family: 'Qwen' },
   { id: 'minimax-m3', displayName: 'MiniMax M3', family: 'Minimax' },
   { id: 'grok-4-7', displayName: 'Grok 4.7', family: 'Grok' },
+  { id: 'composer-2-5', displayName: 'Composer 2.5', family: 'Composer' },
 ] as const satisfies readonly RecommendedTaskModel[];
 
 export type RecommendedTaskModelId =

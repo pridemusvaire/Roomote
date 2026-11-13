@@ -1,0 +1,169 @@
+---
+title: Cursor
+icon: 'https://unpkg.com/@lobehub/icons-static-svg@1.94.0/icons/cursor.svg'
+description: Run coding tasks on Cursor's own agent with a Cursor API key.
+---
+
+Cursor models run on Cursor's own agent (`cursor-agent`) inside the task
+sandbox instead of Roomote's usual model runtime. Usage is billed to your Cursor
+plan.
+
+## Get an API key
+
+Create an API key in the [Cursor dashboard](https://cursor.com/dashboard).
+
+## Configuration
+
+Add **Cursor** in **Settings > Models** and paste the key, or configure:
+
+```sh
+CURSOR_API_KEY=...
+```
+
+Roomote exposes Cursor models with the `cursor/` prefix. Connecting Cursor adds
+`cursor/composer-2.5`.
+
+## How it differs from other providers
+
+- **Coding role only.** Cursor models can be selected as the main coding model
+  of a task or session, never for another role. Helper roles such as subagents
+  and task titles use other models. A role left on **Same as coding model**
+  follows the coding model, so PR reviews run on Cursor when the code review
+  model is left on **Same as coding model** and Cursor is the coding model.
+  Pick a specific code review model to keep reviews on another model.
+- **The key is in the sandbox.** Cursor's agent authenticates itself, so
+  `CURSOR_API_KEY` is present in the task sandbox environment. Providers served
+  through the gateway keep their keys out of the sandbox. The agent is not
+  given any other model provider's key in its environment or in the shells it
+  starts. Those keys, and the other deployment variables, are still written in
+  plaintext to the environment file Roomote keeps in the sandbox
+  (`~/.roomote/env.sh`). The agent's shells skip the provider key exports, but
+  the agent can read the file, because it runs as the same user.
+  Source-control tokens and the environment variables you configured for the
+  repository still reach its commands.
+- **Secret values are masked in some places, not all.** Roomote knows the
+  values of the task's secret variables (those with names such as `TOKEN`,
+  `KEY`, `SECRET` or `PASSWORD`) and the source-control tokens it writes into
+  the sandbox, including a token that was refreshed during the task (the value
+  it replaced stays masked). It masks them as `[redacted]` in:
+  - the task transcript and the agent's logs
+  - the text Roomote's own tools send out: chat and Slack replies and
+    reactions, widgets, reports to a parent session, pull request and merge
+    request comments, messages to other tasks, platform issue reports and
+    vulnerability assessments
+
+  Every other Roomote tool refuses a call whose input contains a secret's
+  value, and names the variable, instead of changing what it was asked to do:
+  - Tools that store text which is read or run later (environments, custom
+    skills and automations, task memory, personalization, and automation work
+    items). The agent repeats the call with `$NAME`, the variable's name, where
+    the value was.
+  - Tools that expand no variable names: fetching a URL, the arguments of an
+    integration call and the search for integration tools, artifact uploads,
+    requests for environment variables, reads such as listing repositories,
+    cloning, or reading chat messages, and any tool Roomote has not classified.
+    A `$NAME` would be sent as it is, so the agent repeats the call without the
+    value. An integration call uses the integration's stored credentials, so it
+    never needs the secret as an argument.
+
+  Only a value that looks like a real secret is refused: one of at least eight
+  characters that either mixes at least two of lowercase letters, uppercase
+  letters, digits and symbols, or is twenty characters or longer. A plain word
+  or number such as the development default `postgres` is not refused, so a
+  call that mentions `postgres:16` goes through. A plain-word value is
+  therefore not hidden by the tools that refuse a call (fetching a URL,
+  integration calls, artifact uploads and the others listed above). It is still
+  masked, for every value of eight characters or more, in the transcript, the
+  agent's logs and the text of the tools that mask (replies, comments and
+  reports).
+
+  Masking does not cover:
+  - integration and Brain MCP servers the agent calls directly, since those are
+    not Roomote's own tools
+  - a command the agent runs itself, such as `curl` or `gh`, which sends its own
+    text
+  - a secret Roomote does not know as a variable or a source-control token, or
+    one shorter than eight characters
+
+  A value that the agent streams in several pieces is masked as long as it is
+  written as ordinary reply or thought text. A variable added during the task,
+  for example in answer to a request for environment variables, is masked from
+  that point on, not in text that was already shown. If Roomote cannot read its
+  list of secret values, for example while the sandbox prepares a snapshot, its
+  tools refuse the call until it can, rather than sending the text unmasked.
+  Tasks on other models are not affected: they keep their own protections.
+- **Permission requests are granted automatically.** The agent can ask Roomote
+  for permission before a tool call. Roomote grants it without asking anyone,
+  choosing the broadest allow option the agent offers, as it does for its
+  default runtime: the task sandbox is the boundary. Integration tools that
+  require approval are still gated. The proxy that serves them opens the
+  request for the Session owner when the call arrives, and the call waits for
+  the decision. A denied call, or one with nobody who can approve it, is
+  refused.
+- **Usage is not recorded by Roomote.** Roomote records no tokens and no cost
+  for Cursor tasks, so cost figures read as zero rather than as a real amount.
+  See [Usage visibility](#usage-visibility).
+- **Switching models starts a fresh session.** If a task moves between a Cursor
+  model and another model, the agent session starts over. Roomote carries the
+  conversation across as a summary and says so in the transcript, but earlier
+  tool calls and results are not available to the new session.
+
+## Cost behavior
+
+Requests count against the plan that owns the API key. When Cursor offers both
+a fast and a standard variant of a model, Roomote uses the standard one so a
+task does not spend the premium-priced fast variant. When Cursor offers only
+the fast variant, as it currently does for `composer-2.5`, Roomote uses it, and
+the plan's allowance may run down faster.
+
+## Usage visibility
+
+Roomote cannot see how much of the Cursor plan a task uses, so it cannot warn
+you before the plan runs out.
+
+- **No usage figures.** Cursor's agent does not report token usage, so Roomote
+  has no record of what Cursor tasks cost. A task's **Inference Cost** shows
+  `0.00`, task cards show no cost, and Cursor tasks do not appear in the cost
+  analytics. Those figures mean "not recorded", not "free".
+- **No usage display or alerts.** Unlike subscription providers such as
+  [ChatGPT](/providers/inference/chatgpt) and
+  [xAI subscription](/providers/inference/xai-subscription), Cursor has no
+  usage line in **Settings**, and Roomote's usage-limit alerts have nothing to
+  measure for it.
+- **The plan limit is the first signal.** When Cursor reports that the plan
+  limit is reached, Roomote switches the task once to the fallback model
+  configured for the role the task runs under: the coding fallback for a
+  normal task, or the code review fallback for a PR review that inherited the
+  Cursor coding model. With no fallback configured for that role, the task
+  stops with a plan-limit error. Roomote never retries into paid usage. See
+  [Fallback models](/models#fallback-models).
+
+Check usage in the [Cursor dashboard](https://cursor.com/dashboard) while you
+learn how much Cursor work your plan covers.
+
+## Verify setup
+
+1. save `CURSOR_API_KEY` (Roomote checks the key with Cursor when you save it,
+   and warns instead of blocking if Cursor cannot be reached)
+2. confirm `cursor/composer-2.5` appears in **Settings > Models**
+3. select it as the coding model for a small task
+4. run the task and confirm usage in the Cursor dashboard
+
+## Common issues
+
+- **The task fails at start saying `CURSOR_API_KEY` is not set.** A Cursor
+  model is selected but the deployment has no Cursor key. Add the key, or pick
+  another coding model.
+- **Authentication errors occur.** Check that the key is valid and belongs to
+  the account or team that should pay for the usage.
+- **The task stops with a plan-limit error.** Raise the limit in Cursor, or
+  configure a fallback model (coding, or code review for PR reviews) so
+  Roomote can continue the task.
+- **A tool call is refused because it contains a secret value.** The message
+  names the variable (never its value). For a tool that stores text read or run
+  later, repeat the call with `$NAME` where the value was. For any other tool,
+  remove the value from the input: an integration call needs no secret, because
+  it uses the integration's stored credentials. A value that is a plain word,
+  such as `postgres`, is not refused.
+- **Helper features use another model.** This is expected: Cursor models are
+  not available for non-coding roles.

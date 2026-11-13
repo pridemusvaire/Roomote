@@ -57,13 +57,18 @@ const config: KnipConfig = {
       ignoreDependencies: ['webpack'],
     },
     'apps/worker': {
-      entry: ['scripts/**/*.ts'],
+      entry: [
+        'scripts/**/*.ts',
+        // A stand-in worker that a test spawns by path to send it signals.
+        'src/sandbox-server/lib/harnesses/__tests__/fixtures/agent-tree-host.ts',
+      ],
       project: ['src/**/*.ts', 'scripts/**/*.ts'],
       ignoreBinaries: [
         'rg',
         'mysqladmin',
         'pg_isready',
         'ps',
+        'sleep',
         'python',
         'fc-cache',
         'dpkg-query',

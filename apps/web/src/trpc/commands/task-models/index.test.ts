@@ -127,6 +127,7 @@ import {
   lookupTaskModelCommand,
   refreshTaskModelMetadataCommand,
   saveTaskModelProviderCommand,
+  updateModelFallbackConfigCommand,
   updateTaskModelSettingsCommand,
 } from './index';
 
@@ -1042,6 +1043,86 @@ describe('lookupTaskModelCommand', () => {
         codingModelRoutingRules:
           'Routing rule reasoning requires a model that supports reasoning.',
       },
+    });
+  });
+
+  it('rejects a Cursor model for any role other than the coding model', async () => {
+    const baseInput = {
+      models: [
+        { id: 'z-ai/glm-5.6', displayName: 'GLM 5.6', family: 'GLM' },
+        {
+          id: 'cursor/composer-2.5',
+          displayName: 'Composer 2.5',
+          family: 'Composer',
+        },
+      ],
+      allowedModelIds: ['z-ai/glm-5.6', 'cursor/composer-2.5'],
+      defaultModelId: 'z-ai/glm-5.6',
+      helperModelId: null,
+      visionModelId: null,
+      codeReviewModelId: null,
+      planningModelId: null,
+      codingModelReasoningEffort: null,
+      helperModelReasoningEffort: null,
+      visionModelReasoningEffort: null,
+      codeReviewModelReasoningEffort: null,
+      planningModelReasoningEffort: null,
+    } satisfies Parameters<typeof updateTaskModelSettingsCommand>[1];
+
+    // OpenCode runs every non-coding role and cannot run a Cursor model.
+    await expect(
+      updateTaskModelSettingsCommand(buildMockAuth(), {
+        ...baseInput,
+        helperModelId: 'cursor/composer-2.5',
+      }),
+    ).resolves.toMatchObject({
+      success: false,
+      fieldErrors: {
+        helperModelId:
+          'Cursor models can only be used as the default coding model.',
+      },
+    });
+  });
+
+  describe('Cursor model fallbacks', () => {
+    beforeEach(() => {
+      mockFindDeploymentSettings.mockResolvedValue({
+        taskModelSettings: {
+          models: [
+            { id: 'z-ai/glm-5.6', displayName: 'GLM 5.6', family: 'GLM' },
+            {
+              id: 'cursor/composer-2.5',
+              displayName: 'Composer 2.5',
+              family: 'Composer',
+            },
+          ],
+          allowedModelIds: ['z-ai/glm-5.6', 'cursor/composer-2.5'],
+          defaultModelId: 'z-ai/glm-5.6',
+        },
+        runtimeModelConfig: null,
+      });
+    });
+
+    it('rejects a Cursor fallback for a role OpenCode runs', async () => {
+      await expect(
+        updateModelFallbackConfigCommand(buildMockAuth(), {
+          enabled: true,
+          roles: {
+            helper: { modelId: 'cursor/composer-2.5', reasoningEffort: null },
+          },
+        }),
+      ).rejects.toThrow(/Cursor models can only be used for coding/);
+    });
+
+    it('allows a Cursor fallback for the coding role', async () => {
+      await expect(
+        updateModelFallbackConfigCommand(buildMockAuth(), {
+          enabled: true,
+          roles: {
+            coding: { modelId: 'cursor/composer-2.5', reasoningEffort: null },
+          },
+        }),
+      ).resolves.toMatchObject({ success: true });
     });
   });
 

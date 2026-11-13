@@ -310,6 +310,21 @@ export interface HarnessEvents {
       trigger: ModelFallbackTrigger;
       sessionId?: string;
       agentType?: string;
+      /**
+       * A prompt that never reached a model before the provider failed (the
+       * session could not be set up). The replacement replays it as is,
+       * instead of asking the agent to continue work it never started.
+       */
+      replayPrompt?: {
+        text: string;
+        images?: string[];
+        source?: string;
+        userId?: string;
+        userName?: string;
+        userImageUrl?: string;
+        clientMessageId?: string;
+        visibleInTranscript?: boolean;
+      };
     },
   ];
 }
@@ -434,6 +449,13 @@ export interface Harness extends EventEmitter<HarnessEvents> {
   getCommandEnv?(): Record<string, string>;
 
   /**
+   * Tells a harness that masks secret values out of the agent's output about
+   * more of them: variables that reached the task after the harness started.
+   * Values are only ever added, never forgotten.
+   */
+  addSecretValues?(values: readonly string[]): void;
+
+  /**
    * Request a reconnect onto the latest known session after the caller has
    * updated runtime state that only takes effect on harness startup.
    */
@@ -442,4 +464,10 @@ export interface Harness extends EventEmitter<HarnessEvents> {
     replayCommands?: TaskCommand[];
     afterCurrentTurn?: boolean;
   }): Promise<void>;
+
+  /**
+   * Ends the task now with `message` as an unrecoverable provider error, for
+   * a failure that restarting the runtime cannot fix.
+   */
+  failTask?(message: string): void;
 }

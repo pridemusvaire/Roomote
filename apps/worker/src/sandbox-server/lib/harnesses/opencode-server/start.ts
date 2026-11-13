@@ -32,6 +32,8 @@ interface StartOpenCodeServerHarnessOptions {
   logger: HarnessLogger;
   mcpServers: Record<string, unknown>;
   initialSessionId?: string;
+  /** See `OpenCodeServerHarnessOptions.handoffContext`. */
+  handoffContext?: string;
   modelOverride?: string;
   reasoningEffortOverride?: ReasoningEffort;
   fallbackModel?: string;
@@ -164,6 +166,7 @@ export async function startOpenCodeServerHarness({
   logger,
   mcpServers,
   initialSessionId,
+  handoffContext,
   modelOverride,
   reasoningEffortOverride,
   fallbackModel,
@@ -359,6 +362,7 @@ export async function startOpenCodeServerHarness({
       logger: log,
       commandEnv,
       initialSessionId,
+      handoffContext,
       model,
       preserveSavedSessionModel: !modelOverrideApplied,
       fallbackModel,

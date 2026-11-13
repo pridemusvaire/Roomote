@@ -320,6 +320,80 @@ describe('generateOpenCodeConfig provider support', () => {
     },
   );
 
+  describe('Cursor models never reach the OpenCode config', () => {
+    /** The operator config (global file) is where the coding model lives. */
+    const generate = (
+      runtimeEnv: Record<string, string>,
+      model?: string,
+    ): { text: string; config: Record<string, unknown> } => {
+      const homeDir = createHomeDir();
+      const result = generateOpenCodeConfig({
+        homeDir,
+        runtimeEnv,
+        ...(model ? { model } : {}),
+      });
+      const operator = readFileSync(
+        join(homeDir, '.config', 'opencode', 'opencode.json'),
+        'utf8',
+      );
+      return {
+        text: `${result.configContent}${operator}`,
+        config: JSON.parse(operator),
+      };
+    };
+
+    it('drops a Cursor helper model and keeps the coding model', () => {
+      const { text, config } = generate({
+        R_MODEL: 'openai/gpt-5',
+        R_SMALL_MODEL: 'cursor/composer-2.5',
+        R_VISION_MODEL: 'cursor/composer-2.5',
+      });
+
+      expect(text).not.toContain('cursor/');
+      expect(config.small_model).toBe('openai/gpt-5');
+    });
+
+    it('runs on the fallback model override when coding is a Cursor model', () => {
+      const { text, config } = generate(
+        {
+          R_MODEL: 'cursor/composer-2.5',
+          R_MODEL_FALLBACK: 'openai/gpt-5',
+          R_SMALL_MODEL: 'cursor/composer-2.5',
+        },
+        'openrouter/anthropic/claude-sonnet-5',
+      );
+
+      expect(text).not.toContain('cursor/');
+      expect(config.model).toBe('openrouter/anthropic/claude-sonnet-5');
+    });
+
+    it('uses the coding fallback when no override remains', () => {
+      const { text, config } = generate({
+        R_MODEL: 'cursor/composer-2.5',
+        R_MODEL_FALLBACK: 'openai/gpt-5',
+      });
+
+      expect(text).not.toContain('cursor/');
+      expect(config.model).toBe('openai/gpt-5');
+    });
+
+    it('ignores a Cursor model passed as the per-task override', () => {
+      const { text, config } = generate(
+        { R_MODEL: 'openai/gpt-5' },
+        'cursor/composer-2.5',
+      );
+
+      expect(text).not.toContain('cursor/');
+      expect(config.model).toBe('openai/gpt-5');
+    });
+
+    it('fails clearly when Cursor is the only model there is', () => {
+      expect(() => generate({ R_MODEL: 'cursor/composer-2.5' })).toThrow(
+        /Cursor model.*OpenCode/,
+      );
+    });
+  });
+
   it.each([false, true])(
     'keeps shared-model variant and reasoning precedence with task override %s',
     (override) => {

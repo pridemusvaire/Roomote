@@ -349,6 +349,7 @@ export function TaskModelSwitcher({
                         )}
                       </span>
                       <ModelSelect
+                        codingOnlyModelsHidden
                         value={selection.model ?? ''}
                         onValueChange={(model) =>
                           applyRoleSelection(role, {

@@ -14,6 +14,7 @@ import {
   RunStatus,
   buildSourceControlTokenMetadata,
   getSourceControlProviderLabel,
+  getTaskPayloadModelIds,
   normalizeSourceControlProvider,
   resolveTaskWorkspace,
   resolveSourceControlProviderFromPayload,
@@ -272,12 +273,18 @@ export async function fetchResolvedRuntimeEnvVars(
   options?: {
     sourceControlProvider?: SourceControlProvider | SourceControlProvider[];
     includeSandboxOpenRouterApiKey?: boolean;
+    /**
+     * The run's payload: the models it selected itself (a launch override, a
+     * routing rule, a switch made mid-run) decide which provider keys it gets.
+     */
+    taskPayload?: Parameters<typeof getTaskPayloadModelIds>[0];
   },
 ): Promise<Record<string, string>> {
   const envVars =
     deploymentEnvVars ?? (await loadPersistedDeploymentEnvVarsFromDb());
   const resolvedModelRuntimeEnv = await resolveSandboxModelRuntimeEnv({
     deploymentEnvVars: envVars,
+    taskModelIds: getTaskPayloadModelIds(options?.taskPayload),
   });
 
   const resolvedEnvVars = redactControlPlaneEnvVars(

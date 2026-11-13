@@ -5,15 +5,30 @@ import {
   engageCredentialWriteBarrier,
   resetCredentialWriteBarrierForTesting,
 } from '../../../lib/credential-write-barrier';
+import {
+  onTaskSecretsAdded,
+  resetTaskSecretsForTesting,
+  useMaskSecretsFile,
+} from '../../../lib/task-secrets';
 import { appRouter } from '../../routers';
 import type { Context } from '../../trpc';
 
-const { mockGetResolvedRuntimeEnvVars, mockFindFirstById, mockInjectEnvVars } =
-  vi.hoisted(() => ({
-    mockGetResolvedRuntimeEnvVars: vi.fn(),
-    mockFindFirstById: vi.fn(),
-    mockInjectEnvVars: vi.fn(),
-  }));
+const {
+  mockGetResolvedRuntimeEnvVars,
+  mockFindFirstById,
+  mockInjectEnvVars,
+  mockWriteMaskSecretsFile,
+} = vi.hoisted(() => ({
+  mockGetResolvedRuntimeEnvVars: vi.fn(),
+  mockFindFirstById: vi.fn(),
+  mockInjectEnvVars: vi.fn(),
+  mockWriteMaskSecretsFile: vi.fn(),
+}));
+
+vi.mock('../../../lib/mask-secrets-file', () => ({
+  writeMaskSecretsFile: mockWriteMaskSecretsFile,
+  removeMaskSecretsFile: vi.fn(),
+}));
 
 vi.mock('@roomote/sdk/client', () => ({
   sdk: {
@@ -99,13 +114,19 @@ function createCaller(workerEnv?: WorkerEnv, runId = 1) {
     workerEnv,
   } as unknown as Context;
 
-  return { caller: appRouter.createCaller(ctx), setCommandEnv };
+  return {
+    caller: appRouter.createCaller(ctx),
+    setCommandEnv,
+  };
 }
 
 describe('reloadDeploymentEnvVars procedure', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     resetCredentialWriteBarrierForTesting();
+    resetTaskSecretsForTesting();
+    await useMaskSecretsFile(true);
+    mockWriteMaskSecretsFile.mockClear();
     mockGetResolvedRuntimeEnvVars.mockResolvedValue({
       OPENAI_API_KEY: 'new-openai-key',
       ANTHROPIC_API_KEY: 'new-anthropic-key',
@@ -173,6 +194,54 @@ describe('reloadDeploymentEnvVars procedure', () => {
       ROOMOTE_TASK_TYPE: 'standard',
       CLAUDE_APPEND_SYSTEM_PROMPT: 'follow the system instructions',
     });
+  });
+
+  it('masks the secrets a reload brings in: the live harness is told and the mask file rewritten after', async () => {
+    const order: string[] = [];
+    mockGetResolvedRuntimeEnvVars.mockResolvedValue({
+      LATE_SERVICE_TOKEN: 'added-mid-task-value',
+      APP_NAME: 'not-a-secret',
+    });
+    mockWriteMaskSecretsFile.mockImplementation(() => order.push('file'));
+    const told = vi.fn((_values: string[]) => order.push('harness'));
+    onTaskSecretsAdded(told);
+    const { caller } = createCaller(createWorkerEnv());
+
+    await caller.commands.reloadDeploymentEnvVars();
+
+    expect(told).toHaveBeenCalledWith(
+      expect.arrayContaining(['added-mid-task-value']),
+    );
+    expect(told.mock.calls[0]![0]).not.toContain('not-a-secret');
+    expect(mockWriteMaskSecretsFile).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(['harness', 'file']);
+  });
+
+  it('masks a new variable before it reaches the shell env, never after', async () => {
+    const order: string[] = [];
+    mockGetResolvedRuntimeEnvVars.mockResolvedValue({
+      LATE_SERVICE_TOKEN: 'added-mid-task-value',
+    });
+    mockWriteMaskSecretsFile.mockImplementationOnce(() => order.push('file'));
+    onTaskSecretsAdded(() => order.push('harness'));
+    mockInjectEnvVars.mockImplementationOnce(() => order.push('shell env'));
+    const { caller } = createCaller(createWorkerEnv());
+
+    await caller.commands.reloadDeploymentEnvVars();
+
+    expect(order).toEqual(['harness', 'file', 'shell env']);
+  });
+
+  it('touches neither the harness secrets nor the mask file when the reload is skipped for a snapshot', async () => {
+    await engageCredentialWriteBarrier();
+    const told = vi.fn();
+    onTaskSecretsAdded(told);
+    const { caller } = createCaller(createWorkerEnv());
+
+    await expect(caller.commands.reloadDeploymentEnvVars()).rejects.toThrow();
+
+    expect(told).not.toHaveBeenCalled();
+    expect(mockWriteMaskSecretsFile).not.toHaveBeenCalled();
   });
 
   it('keeps inherited model transport values out of environment shell files on reload', async () => {

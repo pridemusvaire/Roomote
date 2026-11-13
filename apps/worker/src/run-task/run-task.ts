@@ -3,7 +3,6 @@ import {
   type CommunicationProvider,
   type AcpRequestUserInputAnswers,
   buildInferenceGatewayUrl,
-  buildInferenceProviderRecoveryPrompt,
   DISABLED_MODEL_PROVIDER_ENV_VAR_NAMES,
   INFERENCE_GATEWAY_CHATGPT_ENV_VAR_NAME,
   INFERENCE_GATEWAY_GITHUB_COPILOT_ENV_VAR_NAME,
@@ -53,8 +52,8 @@ import {
   createInitialTaskState,
   createServer,
 } from '../sandbox-server';
-import { TaskCommandName } from '../sandbox-server/lib/harness';
 import { recordChatTurnStart } from '../mcp/roomote-mcp-server/chat-reply-satisfaction';
+import { persistStartedSession } from './persist-started-session';
 import { recordSandboxPromptSlackTurnStart } from '../sandbox-server/procedures/slackReplyTurnTracking';
 import { type IntegrationMcpOptions } from '../commands/setup/setup-mcps';
 
@@ -68,6 +67,8 @@ import {
   DEFAULT_KEEPALIVE_DEV_MS,
   DEFAULT_KEEPALIVE_MS,
 } from './constants';
+import { createModelFallbackHandler } from './model-fallback-handler';
+import { createModelProviderEnvReloader } from './reload-model-provider-env';
 import { buildOpenCodeHarnessEnv, sanitizeEnv } from './env';
 import { startPolling, stopPolling } from './polling';
 import { getLinearSessionIdFromResumePayload } from './linear-resume-payload';
@@ -1247,6 +1248,16 @@ export const runTask = async ({
     // the answer delivery instead of replaying it.
     let pendingTaskModelSettingsRestart = false;
 
+    // A model switch can move the task to another provider (OpenCode to
+    // Cursor), whose key the harness env spawned with does not hold yet.
+    const reloadModelProviderEnv = createModelProviderEnvReloader({
+      runId: taskRun.id,
+      workerEnv,
+      runtimeEnv,
+      getHarness: () => harness,
+      logger,
+    });
+
     const applyTaskModelSettingsUpdate = async (): Promise<{
       application: 'restarted' | 'deferred' | 'unavailable';
     }> => {
@@ -1266,7 +1277,14 @@ export const runTask = async ({
         return { application: 'unavailable' };
       }
 
+      // Before the deferral decision: a deferred restart spawns later, from
+      // whatever env exists then. While a snapshot holds the credential
+      // barrier the env cannot be refreshed, so the restart waits for the
+      // next prompt, which tries again.
+      const reload = await reloadModelProviderEnv();
+
       if (
+        reload === 'snapshot' ||
         phase === 'running' ||
         phase === 'waiting_for_user_input' ||
         !harness.requestReconnect
@@ -1292,6 +1310,12 @@ export const runTask = async ({
         pendingTaskModelSettingsRestart &&
         delivery?.kind !== 'userInputAnswer'
       ) {
+        // The env was refreshed when the settings changed unless a snapshot
+        // blocked it; a restart before that would miss the new provider's key.
+        if ((await reloadModelProviderEnv()) === 'snapshot') {
+          return { shouldReconnect: false };
+        }
+
         pendingTaskModelSettingsRestart = false;
         return {
           shouldReconnect: true,
@@ -1473,54 +1497,16 @@ export const runTask = async ({
       prepareQueuedPromptActorScope,
     });
     pollingState.isConnected = harness.isConnected;
-    harness.on('modelFallbackRequested', async (request) => {
-      try {
-        if (request.role === 'orchestration') return;
-        await sdk.taskRuns.applyModelFallback({
-          runId: taskRun.id,
-          taskId: taskRun.taskId,
-          role: request.role,
-          fromModelId: request.fromModelId,
-          toModelId: request.toModelId,
-          toReasoningEffort: request.toReasoningEffort,
-          errorSummary: request.errorSummary,
-          trigger: request.trigger,
-          ...(request.sessionId ? { sessionId: request.sessionId } : {}),
-        });
-        const freshRun = await sdk.taskRuns.findFirstById(taskRun.id);
-        if (freshRun?.payload && typeof freshRun.payload === 'object') {
-          taskRun.payload = freshRun.payload;
-        }
-        await harness.requestReconnect?.({
-          reason: 'Switching to fallback model',
-        });
-        harness.sendCommand({
-          commandName: TaskCommandName.SendMessage,
-          data: {
-            text: request.agentType
-              ? `The ${request.agentType} delegation failed because its provider was unavailable. Its model fallback is active now. Re-run that delegation and continue without repeating completed work.`
-              : buildInferenceProviderRecoveryPrompt(),
-            visibleInTranscript: false,
-            source: 'model-fallback-recovery',
-          },
-        });
-      } catch (error) {
-        logger.error(
-          `[runTask] Failed to apply model fallback: ${error instanceof Error ? error.message : String(error)}`,
-        );
-        await harness.requestReconnect?.({
-          reason: 'Recovering after model fallback failed to persist',
-        });
-        harness.sendCommand({
-          commandName: TaskCommandName.SendMessage,
-          data: {
-            text: buildInferenceProviderRecoveryPrompt(),
-            visibleInTranscript: false,
-            source: 'model-fallback-recovery',
-          },
-        });
-      }
-    });
+    harness.on(
+      'modelFallbackRequested',
+      createModelFallbackHandler({
+        harness,
+        taskRun,
+        logger,
+        reloadModelProviderEnv,
+        cancelSignal,
+      }),
+    );
 
     const sandboxTimeoutMs =
       Number(process.env.SANDBOX_TIMEOUT_MS) || SANDBOX_TIMEOUT_MS;
@@ -1572,38 +1558,14 @@ export const runTask = async ({
           }
         },
         onStart: async (taskId: string) => {
-          try {
-            await sdk.taskRuns.setHarnessSessionId({
-              runId: taskRun.id,
-              harnessSessionId: taskId,
-            });
-          } catch (error) {
-            logger.warn(
-              `[runTask] Failed to persist harness session ID for task run ${taskRun.id}: ${error instanceof Error ? error.message : String(error)}`,
-            );
-          }
-
+          await persistStartedSession({
+            taskRun,
+            sessionId: taskId,
+            stateFilePath:
+              mcpTaskEnv.ROOMOTE_SLACK_REPLY_SATISFACTION_STATE_FILE,
+            logger,
+          });
           await stampRuntimeTaskStartedAt();
-
-          const existingResult =
-            taskRun.result &&
-            typeof taskRun.result === 'object' &&
-            !Array.isArray(taskRun.result)
-              ? (taskRun.result as Record<string, unknown>)
-              : {};
-
-          const existingRuntimeTaskId =
-            typeof existingResult.runtimeTaskId === 'string'
-              ? existingResult.runtimeTaskId
-              : null;
-
-          // Keep runtimeTaskId synchronized with the actual started harness
-          // session so SnapshotResume runs do not reuse stale IDs.
-          if (existingRuntimeTaskId !== taskId) {
-            const nextResult = { ...existingResult, runtimeTaskId: taskId };
-            await sdk.taskRuns.update({ id: taskRun.id, result: nextResult });
-            taskRun.result = nextResult;
-          }
 
           await recordWorkerRuntimeEvent({
             eventType: 'started',

@@ -405,6 +405,12 @@ type ModelRuntimeEnvOptions = {
   runtimeEnv?: Partial<Record<string, string | undefined>>;
   deploymentEnvVars?: Record<string, string>;
   executor?: DatabaseOrTransaction;
+  /**
+   * Models the task itself selected (see `getTaskPayloadModelIds`). They are
+   * resolved like the deployment's role models, so the task receives the keys
+   * of the providers it uses, not only those the deployment defaults to.
+   */
+  taskModelIds?: readonly string[];
 };
 
 /**
@@ -556,7 +562,9 @@ async function resolveModelRuntimeEnv(
   const configuredRoomoteModelEnvKeys =
     normalizeConfiguredValue(runtimeEnv.R_MODEL_ENV_KEYS) ??
     normalizeConfiguredValue(persistedEnvVars.R_MODEL_ENV_KEYS);
+  const taskModels = (options.taskModelIds ?? []).map(withLiteLlmPrefix);
   const resolvedRoleModels = [
+    ...taskModels,
     ...TASK_MODEL_ROLES.filter(
       (role) =>
         !inferenceGateway || TASK_MODEL_ROLE_DESCRIPTORS[role].includeInSandbox,
@@ -566,10 +574,17 @@ async function resolveModelRuntimeEnv(
         !inferenceGateway || TASK_MODEL_ROLE_DESCRIPTORS[role].includeInSandbox,
     ).map((role) => resolvedFallbacks[role]?.modelId),
   ];
-  const providerKeyNames = resolveProviderKeyNames({
-    runtimeRoomoteModelEnvKeys: configuredRoomoteModelEnvKeys,
-    resolvedRoomoteModels: resolvedRoleModels,
-  });
+  // R_MODEL_ENV_KEYS, when set, replaces what the deployment's role models
+  // imply; the models the task chose itself still add their provider's key.
+  const providerKeyNames = [
+    ...new Set([
+      ...resolveProviderKeyNames({
+        runtimeRoomoteModelEnvKeys: configuredRoomoteModelEnvKeys,
+        resolvedRoomoteModels: resolvedRoleModels,
+      }),
+      ...resolveProviderKeyNames({ resolvedRoomoteModels: taskModels }),
+    ]),
+  ];
   // A running OpenCode task can switch to any enabled catalog model without
   // another dequeue, while configured role agents can select their own
   // providers. Gateway coverage must therefore include both sets up front;

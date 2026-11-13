@@ -36,6 +36,7 @@ export const ENABLED_DIRECT_TASK_MODEL_PROVIDER_IDS = [
   'xai',
   'zai',
   'zai-coding-plan',
+  'cursor',
   'github-copilot',
   'openai-compatible',
   'litellm',

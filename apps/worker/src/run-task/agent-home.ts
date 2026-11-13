@@ -10,6 +10,7 @@ import { HTTP_INTEGRATIONS_BROKER } from '../mcp-provenance';
 
 import {
   createRoomoteAdvisorAgentPrompt,
+  ignoreCursorModel,
   createRoomoteExploreAgentPrompt,
   createRoomoteJudgeAgentPrompt,
   OPENCODE_IDENTITY_PLUGIN_SCRIPT,
@@ -88,6 +89,7 @@ import { OPENCODE_SLACK_HOOKS_PLUGIN_SCRIPT } from './opencode-slack-hooks-plugi
 import { OPENCODE_CHATGPT_GATEWAY_PLUGIN_SCRIPT } from './opencode-chatgpt-gateway-plugin-script';
 import { OPENCODE_TOOL_SAFETY_PLUGIN_SCRIPT } from './opencode-tool-safety-plugin-script';
 import { resolveOpenCodeModelSelection } from './opencode-model';
+import { stripCursorModelsForOpenCode } from './opencode-cursor-models';
 import {
   getRepoLocalSkillInvocations,
   type RepoLocalSkill,
@@ -1483,6 +1485,7 @@ function resolveModelBackedOpenCodeConfig(
   modelOverride?: string,
   reasoningEffortOverride?: ReasoningEffort,
 ): Record<string, unknown> | null {
+  modelOverride = stripCursorModelsForOpenCode(runtimeEnv, modelOverride);
   const isLiteLlmConfigured = isConfiguredEnvValue(runtimeEnv.LITELLM_BASE_URL);
   const modelContextWindows = parseTaskModelContextWindows(
     runtimeEnv[TASK_MODEL_CONTEXT_WINDOWS_ENV_VAR_NAME],
@@ -1844,7 +1847,7 @@ function loadOperatorOpenCodeConfig({
 }
 
 function resolveConfiguredPromptModel(model?: string): string | undefined {
-  const resolvedModel = model?.trim();
+  const resolvedModel = ignoreCursorModel(model?.trim());
 
   if (!resolvedModel || isTaskModelIdDisabled(resolvedModel)) {
     return undefined;

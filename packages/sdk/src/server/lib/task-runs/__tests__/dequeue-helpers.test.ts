@@ -1419,6 +1419,35 @@ describe('redactControlPlaneEnvVars', () => {
 });
 
 describe('fetchResolvedRuntimeEnvVars', () => {
+  it('resolves provider keys for the models the task selected itself', async () => {
+    mockResolveSandboxModelRuntimeEnv.mockResolvedValue({
+      CURSOR_API_KEY: 'sk-cursor',
+    });
+
+    const env = await fetchResolvedRuntimeEnvVars(
+      { CURSOR_API_KEY: 'stale-deployment-copy' },
+      {
+        taskPayload: {
+          harnessModelOverrides: { 'opencode-server': 'cursor/composer-2.5' },
+          modelRoleOverrides: { planning: { model: 'openai/gpt-5' } },
+        },
+      },
+    );
+
+    expect(mockResolveSandboxModelRuntimeEnv).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        taskModelIds: ['cursor/composer-2.5', 'openai/gpt-5'],
+      }),
+    );
+    expect(env.CURSOR_API_KEY).toBe('sk-cursor');
+
+    await fetchResolvedRuntimeEnvVars({});
+
+    expect(mockResolveSandboxModelRuntimeEnv).toHaveBeenLastCalledWith(
+      expect.objectContaining({ taskModelIds: [] }),
+    );
+  });
+
   it('replaces stale canonical and legacy sandbox role values only from the resolved env', async () => {
     const stale: Record<string, string> = {};
     const resolved: Record<string, string> = {};

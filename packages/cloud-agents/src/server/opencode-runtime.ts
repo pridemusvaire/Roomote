@@ -14,6 +14,7 @@ import {
   collectOpenRouterVariantModelAlias,
   CHATGPT_FAST_MODE_ENV_VAR_NAME,
   DISABLED_MODEL_PROVIDER_ENV_VAR_NAMES,
+  isCursorTaskModelId,
   isTaskModelIdDisabled,
   mergeAmazonBedrockProviderConfig,
   mergeBedrockMantleOpenAiProviderConfig,
@@ -641,7 +642,12 @@ export function buildOpenCodeCliEnv(
     const modelEnvVarName = TASK_MODEL_ROLE_DESCRIPTORS[role].modelEnvVar;
     const modelId = env[modelEnvVarName]?.trim();
 
-    if (modelId && isTaskModelIdDisabled(modelId)) {
+    // Cursor models run on Cursor's own agent, never on OpenCode. A helper
+    // role left on one behaves as if it were unset, like a disabled provider.
+    if (
+      modelId &&
+      (isTaskModelIdDisabled(modelId) || isCursorTaskModelId(modelId))
+    ) {
       delete env[modelEnvVarName];
     }
   }
